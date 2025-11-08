@@ -1,16 +1,20 @@
 /**
- * Debug widget showing zoom level scale with layer markers.
- * Displays optimal zoom for each layer and current zoom position.
+ * Debug widget showing zoom level scale bar with explicit layer optimal positions.
+ * Visualises the scale bar metaphor: each layer has an optimal viewing position,
+ * spaced by log₂(relativeScale) zoom units.
  */
 export class ZoomDebugWidget {
     container: HTMLElement;
     scaleCanvas: HTMLCanvasElement;
     zoomLabel: HTMLElement;
     layerLabel: HTMLElement;
-    layerScaleFactor: number; // For calculating correct layer-to-zoom mapping
+    scaleBarLabel: HTMLElement;
+    layerScaleFactor: number;
+    scaleBar: Map<number, number>; // layer → optimal zoom position
 
     constructor(layerScaleFactor: number = 5) {
         this.layerScaleFactor = layerScaleFactor;
+        this.scaleBar = new Map();
         this.container = document.createElement('div');
         this.container.id = 'zoom-debug-widget';
         this.container.style.cssText = `
@@ -37,9 +41,15 @@ export class ZoomDebugWidget {
 
         // Layer display
         this.layerLabel = document.createElement('div');
-        this.layerLabel.style.marginBottom = '10px';
+        this.layerLabel.style.marginBottom = '5px';
         this.layerLabel.textContent = 'Layer: 0 | Opacity: 1.0';
         this.container.appendChild(this.layerLabel);
+
+        // Scale bar info
+        this.scaleBarLabel = document.createElement('div');
+        this.scaleBarLabel.style.cssText = 'margin-bottom: 10px; font-size: 10px; opacity: 0.7;';
+        this.scaleBarLabel.textContent = 'Scale Bar: Building...';
+        this.container.appendChild(this.scaleBarLabel);
 
         // Canvas for scale visualization
         this.scaleCanvas = document.createElement('canvas');
@@ -57,25 +67,56 @@ export class ZoomDebugWidget {
     }
 
     /**
-     * Update widget with current zoom state and layer info.
+     * Build the scale bar from layer metadata.
+     * Each layer has an optimal zoom position separated by log₂(relativeScale) units.
      */
-    update(zoomLevel: number, currentLayer: number, opacity: number, minZoom: number, maxZoom: number, layerScaleFactor: number): void {
-        const zoomWindowSize = Math.log2(layerScaleFactor) * 3;
-        this.zoomLabel.textContent = `Zoom: ${zoomLevel.toFixed(2)}`;
-        this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Window: ${zoomWindowSize.toFixed(1)}`;
-
-        this.drawScale(zoomLevel, minZoom, maxZoom, currentLayer, zoomWindowSize);
+    buildScaleBar(minLayer: number, maxLayer: number, layerScaleFactor: number): void {
+        this.scaleBar.clear();
+        this.layerScaleFactor = layerScaleFactor;
+        
+        let currentZoom = 0; // L0 at zoom = 0 (arbitrary reference)
+        this.scaleBar.set(0, currentZoom);
+        
+        // For now, assume uniform scaling (can be extended with per-layer metadata)
+        for (let layer = 1; layer <= maxLayer; layer++) {
+            currentZoom += Math.log2(layerScaleFactor);
+            this.scaleBar.set(layer, currentZoom);
+        }
+        
+        // Update scale bar info label
+        const spacing = Math.log2(layerScaleFactor).toFixed(2);
+        this.scaleBarLabel.textContent = `Scale Bar: L0→L1 spacing = ${spacing} zoom units`;
     }
 
     /**
-     * Draw zoom scale with layer markers and current position indicator.
+     * Update widget with current zoom state and layer info.
      */
-    private drawScale(zoomLevel: number, minZoom: number, maxZoom: number, currentLayer: number, zoomWindowSize: number): void {
+    update(zoomLevel: number, currentLayer: number, opacity: number, minZoom: number, maxZoom: number, layerScaleFactor: number): void {
+        // Build scale bar if not yet built or if scale factor changed
+        if (this.scaleBar.size === 0 || this.layerScaleFactor !== layerScaleFactor) {
+            const maxLayer = Math.ceil((maxZoom - minZoom) / Math.log2(layerScaleFactor)) + 2;
+            this.buildScaleBar(0, maxLayer, layerScaleFactor);
+        }
+        
+        const optimalZoom = this.scaleBar.get(currentLayer) ?? 0;
+        const distanceFromOptimal = (zoomLevel - optimalZoom).toFixed(2);
+        
+        this.zoomLabel.textContent = `Zoom: ${zoomLevel.toFixed(2)} (L${currentLayer}-optimal: ${optimalZoom.toFixed(2)})`;
+        this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Distance: ${distanceFromOptimal}`;
+
+        this.drawScale(zoomLevel, minZoom, maxZoom, currentLayer);
+    }
+
+    /**
+     * Draw zoom scale bar with explicit layer optimal positions.
+     * Each layer marker shows the optimal zoom position from the scale bar.
+     */
+    private drawScale(zoomLevel: number, minZoom: number, maxZoom: number, currentLayer: number): void {
         const ctx = this.scaleCanvas.getContext('2d')!;
         const width = this.scaleCanvas.width;
         const height = this.scaleCanvas.height;
         const padding = 10;
-        const scaleTop = 15;
+        const scaleTop = 20;
         const scaleHeight = 12;
         const scaleBottom = scaleTop + scaleHeight;
 
@@ -83,7 +124,7 @@ export class ZoomDebugWidget {
         ctx.fillStyle = 'rgba(0, 30, 0, 0.5)';
         ctx.fillRect(0, 0, width, height);
 
-        // Draw scale bar
+        // Draw scale bar (horizontal line)
         ctx.strokeStyle = '#00ff00';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -104,7 +145,7 @@ export class ZoomDebugWidget {
         const scaleRange = width - 2 * padding;
         const zoomPos = padding + ((zoomLevel - minZoom) / zoomRange) * scaleRange;
 
-        // Draw current zoom indicator
+        // Draw current zoom indicator (yellow triangle)
         ctx.fillStyle = '#ffff00';
         ctx.beginPath();
         ctx.moveTo(zoomPos, scaleTop - 8);
@@ -113,66 +154,69 @@ export class ZoomDebugWidget {
         ctx.closePath();
         ctx.fill();
 
-        // Draw window range indicator (semi-transparent zone)
-        // zoomWindowSize is in layer-space, so convert to zoom-space
-        const log2LayerScale = Math.log2(this.layerScaleFactor);
-        const windowRadiusZoom = (zoomWindowSize / 2) * log2LayerScale;
-        
-        const leftWindowZoom = zoomLevel - windowRadiusZoom;
-        const rightWindowZoom = zoomLevel + windowRadiusZoom;
-        
-        const leftWindowPos = padding + ((Math.max(minZoom, leftWindowZoom) - minZoom) / zoomRange) * scaleRange;
-        const rightWindowPos = padding + ((Math.min(maxZoom, rightWindowZoom) - minZoom) / zoomRange) * scaleRange;
-
-        ctx.fillStyle = 'rgba(255, 255, 0, 0.1)';
-        ctx.fillRect(leftWindowPos, scaleTop - 10, rightWindowPos - leftWindowPos, 25);
-        ctx.strokeStyle = 'rgba(255, 255, 0, 0.3)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(leftWindowPos, scaleTop - 10, rightWindowPos - leftWindowPos, 25);
-
-        // Draw layer markers using actual inverse formula
-        // layer = layerOffset - (zoomLevel / log₂(layerScaleFactor))
-        // So: zoomLevel = (layerOffset - layer) * log₂(layerScaleFactor)
-        // 
-        // We estimate layerOffset from the zoom range:
-        // At maxZoom we should see the minimum (most detailed) layer = 0
-        // At minZoom we should see the maximum (most abstract) layer
-        // layerOffset = 0 + (maxZoom / log₂(layerScaleFactor)) = maxZoom / log₂(5)
+        // Draw layer optimal positions using scale bar
         ctx.fillStyle = '#0088ff';
         ctx.font = '9px monospace';
         ctx.textAlign = 'center';
         
-        const estimatedLayerOffset = maxZoom / log2LayerScale;
-        
-        // Determine how many layers fit in the zoom range
-        const estimatedMaxLayer = Math.ceil(estimatedLayerOffset - (minZoom / log2LayerScale));
-        
-        for (let layer = 0; layer <= estimatedMaxLayer; layer++) {
-            // Using the actual formula: zoomLevel = (layerOffset - layer) * log₂(layerScaleFactor)
-            const layerZoom = (estimatedLayerOffset - layer) * log2LayerScale;
-            
-            if (layerZoom >= minZoom && layerZoom <= maxZoom) {
-                const layerPos = padding + ((layerZoom - minZoom) / zoomRange) * scaleRange;
+        for (const [layer, optimalZoom] of this.scaleBar.entries()) {
+            if (optimalZoom >= minZoom && optimalZoom <= maxZoom) {
+                const layerPos = padding + ((optimalZoom - minZoom) / zoomRange) * scaleRange;
 
-                // Small tick mark
+                // Highlight current layer's optimal position
+                const isCurrentLayer = layer === currentLayer;
+                const tickHeight = isCurrentLayer ? 8 : 4;
+                const tickColor = isCurrentLayer ? '#ff00ff' : '#0088ff';
+                
+                ctx.strokeStyle = tickColor;
+                ctx.lineWidth = isCurrentLayer ? 2 : 1;
+                
+                // Tick mark
                 ctx.beginPath();
                 ctx.moveTo(layerPos, scaleBottom);
-                ctx.lineTo(layerPos, scaleBottom + 4);
+                ctx.lineTo(layerPos, scaleBottom + tickHeight);
                 ctx.stroke();
 
-                // Layer number label
-                ctx.fillText(`L${layer}`, layerPos, scaleBottom + 14);
+                // Layer label
+                ctx.fillStyle = tickColor;
+                ctx.fillText(`L${layer}`, layerPos, scaleBottom + 14 + tickHeight);
+                
+                // Show optimal zoom value for current layer
+                if (isCurrentLayer) {
+                    ctx.font = '8px monospace';
+                    ctx.fillText(`${optimalZoom.toFixed(1)}`, layerPos, scaleTop - 10);
+                    ctx.font = '9px monospace';
+                }
             }
         }
 
-        // Min/Max labels (left = zoomed out/high layers, right = zoomed in/low layers)
+        // Draw fade regions around current layer optimal position
+        const fadeDistance = Math.log2(this.layerScaleFactor) * 0.5; // Half the layer spacing
+        const currentOptimal = this.scaleBar.get(currentLayer) ?? zoomLevel;
+        
+        const fadeLeftZoom = currentOptimal - fadeDistance;
+        const fadeRightZoom = currentOptimal + fadeDistance;
+        
+        const fadeLeftPos = padding + ((Math.max(minZoom, fadeLeftZoom) - minZoom) / zoomRange) * scaleRange;
+        const fadeRightPos = padding + ((Math.min(maxZoom, fadeRightZoom) - minZoom) / zoomRange) * scaleRange;
+
+        // Draw fade region (semi-transparent)
+        ctx.fillStyle = 'rgba(255, 0, 255, 0.15)';
+        ctx.fillRect(fadeLeftPos, scaleTop - 5, fadeRightPos - fadeLeftPos, scaleHeight + 10);
+        ctx.strokeStyle = 'rgba(255, 0, 255, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(fadeLeftPos, scaleTop - 5, fadeRightPos - fadeLeftPos, scaleHeight + 10);
+        ctx.setLineDash([]);
+
+        // Min/Max labels
         ctx.fillStyle = '#00ff00';
         ctx.font = '10px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(`${minZoom.toFixed(1)}(out)`, padding + 2, height - 2);
+        ctx.fillText(`${minZoom.toFixed(1)}`, padding + 2, height - 2);
 
         ctx.textAlign = 'right';
-        ctx.fillText(`${maxZoom.toFixed(1)}(in)`, width - padding - 2, height - 2);
+        ctx.fillText(`${maxZoom.toFixed(1)}`, width - padding - 2, height - 2);
     }
 
     /**
