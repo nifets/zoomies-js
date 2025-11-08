@@ -10,6 +10,6 @@ export default defineConfig({
         }
     },
     server: {
-        open: '/demo.html'
+        open: '/test.html'
     }
 });

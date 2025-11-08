@@ -1,47 +1,51 @@
-import { Node } from '../core/Node';
-import { Edge } from '../core/Edge';
-import { HyperEdge } from '../core/HyperEdge';
-import { Module } from '../core/Module';
+import { Entity } from '../core/Entity';
+import { Connection } from '../core/Connection';
 import { Renderer } from '../rendering/Renderer';
 import { InteractionManager } from './InteractionManager';
 import { ZoomManager } from './ZoomManager';
-import { PhysicsEngine } from './PhysicsEngine';
+import { PhysicsEngine, PhysicsConfig } from './PhysicsEngine';
+import { LayerDetailManager } from './LayerDetailManager';
+import { ZoomDebugWidget } from '../debug/ZoomDebugWidget';
 
 /**
  * Main graph manager and scene controller.
- * Orchestrates nodes, edges, modules, physics, rendering, and interactions.
+ * Works with flat lists of entities and connections.
  */
 export class GraphManager {
-    nodes: Node[];
-    edges: Edge[];
-    hyperEdges: HyperEdge[];
-    modules: Module[];
+    root: Entity | null;
+    entities: Entity[];
+    allConnections: Connection[];
     renderer: Renderer;
     interactionManager: InteractionManager;
     zoomManager: ZoomManager;
     physicsEngine: PhysicsEngine;
+    layerDetailManager: LayerDetailManager;
+    zoomDebugWidget: ZoomDebugWidget | null;
     canvas: HTMLCanvasElement;
     isPhysicsEnabled: boolean;
     animationFrameId: number | null;
     lastZoom: number;
-    draggedNode: Node | null;
-    pinnedNodes: Set<Node>;
+    draggedNode: Entity | null;
+    pinnedNodes: Set<Entity>;
     isPanning: boolean;
     panStartX: number;
     panStartY: number;
     offsetStartX: number;
     offsetStartY: number;
 
-    constructor(canvas: HTMLCanvasElement) {
+    constructor(canvas: HTMLCanvasElement, physicsConfig?: PhysicsConfig) {
         this.canvas = canvas;
-        this.nodes = [];
-        this.edges = [];
-        this.hyperEdges = [];
-        this.modules = [];
-        this.renderer = new Renderer(canvas);
-        this.interactionManager = new InteractionManager();
+        this.root = null;
+        this.entities = [];
+        this.allConnections = [];
         this.zoomManager = new ZoomManager(0, -3, 3);
-        this.physicsEngine = new PhysicsEngine();
+        this.layerDetailManager = new LayerDetailManager({
+            layerScaleFactor: 3
+        });
+        this.renderer = new Renderer(canvas, this.zoomManager, this.layerDetailManager);
+        this.interactionManager = new InteractionManager();
+        this.physicsEngine = new PhysicsEngine(physicsConfig);
+        this.zoomDebugWidget = null;
         this.isPhysicsEnabled = false;
         this.animationFrameId = null;
         this.lastZoom = 0;
@@ -58,260 +62,360 @@ export class GraphManager {
 
     async init(): Promise<void> {
         await this.renderer.init();
-    }
-
-    /**
-     * Add a node to the graph.
-     */
-    addNode(node: Node): void {
-        if (!this.nodes.includes(node)) {
-            this.nodes.push(node);
-            if (this.isPhysicsEnabled) {
-                this.physicsEngine.init(this.getVisibleNodes(), this.edges, this.hyperEdges);
-            }
-        }
-    }
-
-    /**
-     * Remove a node from the graph.
-     */
-    removeNode(node: Node): void {
-        this.nodes = this.nodes.filter(n => n !== node);
-        // Remove edges connected to this node
-        this.edges = this.edges.filter(e => e.source !== node && e.target !== node);
-        this.interactionManager.deselectNode(node);
-    }
-
-    /**
-     * Add an edge to the graph.
-     */
-    addEdge(edge: Edge): void {
-        if (!this.edges.includes(edge)) {
-            // Auto-detect cross-module edges
-            const sourceModule = this.findModuleForNode(edge.source);
-            const targetModule = this.findModuleForNode(edge.target);
-            if (sourceModule && targetModule && sourceModule !== targetModule) {
-                edge.sourceModule = sourceModule;
-                edge.targetModule = targetModule;
+        
+        // Set up zoom manager callback for both zoom and focused camera adjustment
+        this.zoomManager.onZoomChange = (zoomLevel: number) => {
+            const cameraScale = Math.pow(2, zoomLevel);
+            
+            // If focused zoom is active, adjust camera to keep focus point under cursor
+            if (this.zoomManager.focusPoint) {
+                const prevScale = Math.pow(2, this.zoomManager.prevZoom);
+                const scaleChange = cameraScale / prevScale;
+                
+                this.renderer.offsetX = this.zoomManager.focusPoint.x + (this.renderer.offsetX - this.zoomManager.focusPoint.x) * scaleChange;
+                this.renderer.offsetY = this.zoomManager.focusPoint.y + (this.renderer.offsetY - this.zoomManager.focusPoint.y) * scaleChange;
             }
             
-            this.edges.push(edge);
-            if (this.isPhysicsEnabled) {
-                this.physicsEngine.init(this.getVisibleNodes(), this.edges, this.hyperEdges);
-            }
-        }
+            this.renderer.setCamera(cameraScale, this.renderer.offsetX, this.renderer.offsetY);
+            this.updateVisibility();
+        };
     }
 
     /**
-     * Remove an edge from the graph.
+     * Build the graph from flat lists: entities and connections.
+     * - Populates entity.connections with edges they're involved in
+     * - Populates entity.internalConnections for edges between their children
+     * - Generates synthetic edges from parent-child relationships
+     * - Merges user + synthetic edges that connect the same node pairs
+     * - Updates LayerDetailManager with hierarchy layer bounds and adjusts zoom range
+     * 
+     * Call this after creating entities and connections, before physics/rendering.
      */
-    removeEdge(edge: Edge): void {
-        this.edges = this.edges.filter(e => e !== edge);
-    }
-
-    /**
-     * Add a hyperedge to the graph.
-     */
-    addHyperEdge(hyperEdge: HyperEdge): void {
-        if (!this.hyperEdges.includes(hyperEdge)) {
-            this.hyperEdges.push(hyperEdge);
-        }
-    }
-
-    /**
-     * Remove a hyperedge from the graph.
-     */
-    removeHyperEdge(hyperEdge: HyperEdge): void {
-        this.hyperEdges = this.hyperEdges.filter(he => he !== hyperEdge);
-    }
-
-    /**
-     * Add a module to the graph.
-     */
-    addModule(module: Module): void {
-        if (!this.modules.includes(module)) {
-            this.modules.push(module);
-        }
-    }
-
-    /**
-     * Remove a module from the graph.
-     */
-    removeModule(module: Module): void {
-        this.modules = this.modules.filter(m => m !== module);
-    }
-
-    /**
-     * Collapse a module: hide internal nodes/edges, show summary edges.
-     */
-    collapseModule(module: Module): void {
-        module.collapse();
-        this.updateSummaryEdges(module);
-    }
-
-    /**
-     * Expand a module: show internal nodes/edges, hide summary edges.
-     */
-    expandModule(module: Module): void {
-        module.expand();
-        this.updateSummaryEdges(module);
-    }
-
-    /**
-     * Update summary edges for a module.
-     */
-    private updateSummaryEdges(module: Module): void {
-        if (module.collapsed) {
-            module.updateSummaryEdges();
-        }
-    }
-
-    /**
-     * Get all visible nodes (including children of modules, recursive).
-     */
-    getVisibleNodes(): Node[] {
-        const visible: Node[] = [];
+    buildGraph(entities: Entity[], connections: Connection[]): void {
+        // Store the flat lists
+        this.entities = entities;
+        this.allConnections = connections;
         
-        // Add top-level nodes
-        for (const node of this.nodes) {
-            if (!node.implicit && node.visible) {
-                visible.push(node);
+        // Calculate min/max layers in hierarchy
+        const layers = this.layerDetailManager.getLayersInHierarchy(entities);
+        if (layers.length > 0) {
+            const minLayer = Math.min(...layers);
+            const maxLayer = Math.max(...layers);
+            this.layerDetailManager.setHierarchyLayers(minLayer, maxLayer);
+            
+            // Update ZoomManager's range to match calculated zoom range
+            this.zoomManager.minZoom = this.layerDetailManager.config.zoomRangeMin;
+            this.zoomManager.maxZoom = this.layerDetailManager.config.zoomRangeMax;
+        }
+        
+        // For each entity, collect all connections that involve it
+        for (const entity of entities) {
+            entity.connections = connections.filter(conn => 
+                this.connectionTouchesEntity(conn, entity)
+            );
+            
+            // For composites, collect internal connections (between children)
+            if (entity.isComposite()) {
+                const childIds = new Set(entity.children.map(c => c.id));
+                entity.internalConnections = connections.filter(conn => 
+                    conn.sources.length > 0 && conn.targets.length > 0 &&
+                    childIds.has(conn.sources[0].id) && 
+                    childIds.has(conn.targets[0].id)
+                );
             }
         }
         
-        // Recursively add visible children from modules
-        for (const module of this.modules) {
-            visible.push(...module.getVisibleChildren());
+        // Generate synthetic edges from hierarchy
+        const syntheticEdges = this.generateSyntheticEdges(entities);
+        
+        // Merge user and synthetic edges that connect the same node pairs
+        this.mergeConnections(connections, syntheticEdges);
+    }
+    
+    /**
+     * Check if a connection touches an entity (directly or through its children).
+     */
+    private connectionTouchesEntity(conn: Connection, entity: Entity): boolean {
+        if (conn.sources.length === 0 || conn.targets.length === 0) return false;
+        
+        // Direct connection to this entity
+        if (conn.sources.includes(entity) || conn.targets.includes(entity)) {
+            return true;
         }
         
-        return visible;
+        // Connection between children of this entity
+        const childIds = new Set(entity.children.map(c => c.id));
+        return (childIds.has(conn.sources[0].id) || childIds.has(conn.targets[0].id)) ||
+               (childIds.has(conn.sources[0].id) && childIds.has(conn.targets[0].id));
     }
-
+    
     /**
-     * Get all visible edges.
+     * Generate synthetic edges from parent-child hierarchy.
+     * When two composites have edges between their children, create synthetic
+     * edges between the composites themselves.
      */
-    getVisibleEdges(): Edge[] {
-        return this.edges.filter(e => !e.hidden);
-    }
-
-    /**
-     * Get all visible hyperedges.
-     */
-    getVisibleHyperEdges(): HyperEdge[] {
-        return this.hyperEdges.filter(he => !he.hidden);
-    }
-
-    /**
-     * Find which module contains a given node (recursively).
-     */
-    findModuleForNode(node: Node): Module | null {
-        for (const module of this.modules) {
-            if (module.children.includes(node)) {
-                return module;
+    private generateSyntheticEdges(entities: Entity[]): Connection[] {
+        const synthetic: Connection[] = [];
+        const composites = entities.filter(e => e.isComposite());
+        
+        // For each pair of composites
+        for (let i = 0; i < composites.length; i++) {
+            for (let j = i + 1; j < composites.length; j++) {
+                const comp1 = composites[i];
+                const comp2 = composites[j];
+                
+                // Check if there are any edges between children of comp1 and comp2
+                const edges1to2 = this.findEdgesBetweenChildren(comp1, comp2);
+                const edges2to1 = this.findEdgesBetweenChildren(comp2, comp1);
+                
+                if (edges1to2.length > 0) {
+                    const syntheticId = `synthetic_${comp1.id}_to_${comp2.id}`;
+                    const synthEdge = new Connection(syntheticId, [comp1], [comp2], { synthetic: true });
+                    for (const edge of edges1to2) {
+                        synthEdge.addSubEdge('synthetic', edge.sources[0], edge.targets[0]);
+                    }
+                    synthetic.push(synthEdge);
+                }
+                
+                if (edges2to1.length > 0) {
+                    const syntheticId = `synthetic_${comp2.id}_to_${comp1.id}`;
+                    const synthEdge = new Connection(syntheticId, [comp2], [comp1], { synthetic: true });
+                    for (const edge of edges2to1) {
+                        synthEdge.addSubEdge('synthetic', edge.sources[0], edge.targets[0]);
+                    }
+                    synthetic.push(synthEdge);
+                }
             }
-            // Could also check recursively for nested modules
         }
+        
+        return synthetic;
+    }
+    
+    /**
+     * Find all edges that go from children of source to children of target.
+     */
+    private findEdgesBetweenChildren(source: Entity, target: Entity): Connection[] {
+        if (!source.isComposite() || !target.isComposite()) return [];
+        
+        const sourceChildIds = new Set(source.children.map(c => c.id));
+        const targetChildIds = new Set(target.children.map(c => c.id));
+        
+        // Find all connections where source is child of `source` and target is child of `target`
+        return this.allConnections.filter(conn => 
+            conn.sources.length > 0 && conn.targets.length > 0 &&
+            sourceChildIds.has(conn.sources[0].id) &&
+            targetChildIds.has(conn.targets[0].id)
+        );
+    }
+    
+    /**
+     * Merge synthetic edges with user edges. When edges connect the same node pair,
+     * combine them into one Connection with multiple subEdges.
+     * Also mark inter-composite edges as hidden (they're represented by synthetic edges).
+     */
+    private mergeConnections(userEdges: Connection[], syntheticEdges: Connection[]): void {
+        // Create a map of node pair → connection
+        const edgeMap = new Map<string, Connection>();
+        const interCompositeEdgeIds = new Set<string>();
+        
+        // First pass: identify all inter-composite user edges
+        for (const edge of userEdges) {
+            if (edge.sources.length > 0 && edge.targets.length > 0) {
+                const source = edge.sources[0];
+                const target = edge.targets[0];
+                
+                // Check if this is an inter-composite edge
+                if (source.parent && target.parent && 
+                    source.parent !== target.parent &&
+                    !source.parent.implicit && !target.parent.implicit) {
+                    interCompositeEdgeIds.add(edge.id);
+                    console.log(`[GraphManager] Marking inter-composite edge as hidden: ${edge.id} (${source.id} → ${target.id})`);
+                }
+            }
+        }
+        
+        // Add user edges, but mark inter-composite ones as hidden
+        for (const edge of userEdges) {
+            if (edge.sources.length > 0 && edge.targets.length > 0) {
+                if (interCompositeEdgeIds.has(edge.id)) {
+                    edge.hidden = true; // Hide inter-composite edges
+                }
+                const key = `${edge.sources[0].id}→${edge.targets[0].id}`;
+                edgeMap.set(key, edge);
+            }
+        }
+        
+        // Merge synthetic edges
+        for (const synthEdge of syntheticEdges) {
+            if (synthEdge.sources.length > 0 && synthEdge.targets.length > 0) {
+                const key = `${synthEdge.sources[0].id}→${synthEdge.targets[0].id}`;
+                
+                if (edgeMap.has(key)) {
+                    // Merge: add synthetic sub-edges to existing user edge
+                    const existing = edgeMap.get(key)!;
+                    for (const subEdge of synthEdge.subEdges) {
+                        existing.addSubEdge(subEdge.type, subEdge.source, subEdge.target);
+                    }
+                } else {
+                    // New: add synthetic edge
+                    edgeMap.set(key, synthEdge);
+                }
+            }
+        }
+        
+        // Update this.allConnections with merged result
+        this.allConnections = Array.from(edgeMap.values());
+    }
+
+    /**
+     * Set the root entity for the entire graph.
+     */
+    setRoot(root: Entity): void {
+        this.root = root;
+        if (this.isPhysicsEnabled) {
+            this.enablePhysics();
+        }
+    }
+
+    /**
+     * Collect all entities from tree (including composites and leaves, excluding implicit).
+     */
+    private getAllEntities(entity: Entity = this.root!): Entity[] {
+        // If we have stored entities from buildGraph, use those
+        if (this.entities.length > 0) {
+            return this.entities.filter(e => !e.implicit);
+        }
+        
+        // Fallback for legacy tree-based usage
+        if (!entity) return [];
+        const all: Entity[] = [];
+        
+        if (!entity.implicit) {
+            all.push(entity);
+        }
+        
+        if (entity.isComposite()) {
+            for (const child of entity.children) {
+                all.push(...this.getAllEntities(child));
+            }
+        }
+        
+        return all;
+    }
+
+    /**
+     * Collect all connections from tree (recursively from all composites).
+     */
+    private getAllConnections(entity: Entity = this.root!): Connection[] {
+        // If we have stored connections from buildGraph, use those
+        if (this.allConnections.length > 0) {
+            return this.allConnections;
+        }
+        
+        // Fallback for legacy tree-based usage
+        if (!entity) return [];
+        const connections: Connection[] = [];
+        
+        if (entity.isComposite()) {
+            connections.push(...entity.connections);
+            
+            for (const child of entity.children) {
+                connections.push(...this.getAllConnections(child));
+            }
+        }
+        
+        return connections;
+    }
+
+    /**
+     * Collect all composite entities from tree.
+     */
+    private getAllComposites(entity: Entity = this.root!): Entity[] {
+        if (!entity) return [];
+        const composites: Entity[] = [];
+        
+        if (entity.isComposite()) {
+            composites.push(entity);
+            
+            for (const child of entity.children) {
+                composites.push(...this.getAllComposites(child));
+            }
+        }
+        
+        return composites;
+    }
+
+    /**
+     * Get visible nodes based on current zoom level (excluding implicit).
+     */
+    getVisibleNodes(): Entity[] {
+        return this.getAllEntities().filter(e => !e.implicit && e.visible);
+    }
+
+    /**
+     * Get all visible connections.
+     */
+    getVisibleConnections(): Connection[] {
+        return this.getAllConnections().filter(c => !c.hidden);
+    }
+
+    /**
+     * Find which composite contains a given entity (recursively).
+     */
+    private findCompositeForEntity(target: Entity, entity: Entity = this.root!): Entity | null {
+        if (!entity.isComposite()) return null;
+        
+        if (entity.children.includes(target)) {
+            return entity;
+        }
+        
+        for (const child of entity.children) {
+            const found = this.findCompositeForEntity(target, child);
+            if (found) return found;
+        }
+        
         return null;
     }
 
     /**
-     * Infer higher-level edges from lower-level edges.
-     * For each lower-level edge, if source and target are in different modules,
-     * create a higher-level edge connecting those modules.
-     * Returns map of module-pair -> edges for grouping.
-     */
-    inferHierarchicalEdges(): Map<string, Edge[]> {
-        const hierarchicalEdges = new Map<string, Edge[]>();
-
-        for (const edge of this.edges) {
-            const sourceModule = this.findModuleForNode(edge.source);
-            const targetModule = this.findModuleForNode(edge.target);
-
-            // Only create hierarchical edge if nodes are in different modules
-            if (sourceModule && targetModule && sourceModule !== targetModule) {
-                const pairKey = `${sourceModule.id}-${targetModule.id}`;
-                if (!hierarchicalEdges.has(pairKey)) {
-                    hierarchicalEdges.set(pairKey, []);
-                }
-                hierarchicalEdges.get(pairKey)!.push(edge);
-            }
-        }
-
-        return hierarchicalEdges;
-    }
-
-    /**
-     * Create a higher-level edge from a lower-level edge pair.
-     * User provides a transformation function to customize the higher-level edge.
-     */
-    createHierarchicalEdge(
-        sourceModule: Module,
-        targetModule: Module,
-        detailEdges: Edge[],
-        transform?: (detailEdges: Edge[]) => Record<string, any>
-    ): Edge {
-        const defaultAttrs = {
-            colour: '#f39c12',
-            width: 2,
-            isHierarchical: true
-        };
-
-        const customAttrs = transform ? transform(detailEdges) : {};
-        const attributes = { ...defaultAttrs, ...customAttrs };
-
-        const hierarchicalEdge = new Edge(
-            `hier_${sourceModule.id}_${targetModule.id}`,
-            sourceModule,
-            targetModule,
-            attributes
-        );
-
-        // Link detail edges
-        hierarchicalEdge.detailEdges = detailEdges;
-        hierarchicalEdge.sourceModule = sourceModule;
-        hierarchicalEdge.targetModule = targetModule;
-
-        return hierarchicalEdge;
-    }
-
-    /**
-     * Get all nodes for physics simulation (including modules as root entities).
-     * Modules are treated as first-class nodes in the hierarchy.
-     */
-    getAllRootNodes(): Node[] {
-        return this.nodes.concat(this.modules);
-    }
-
-    /**
-     * Get all leaf nodes recursively (no implicit nodes, respects hierarchy).
-     */
-    getAllLeafNodes(): Node[] {
-        const leaves: Node[] = [];
-        
-        // Collect from top-level nodes
-        for (const node of this.nodes) {
-            if (!node.implicit) {
-                leaves.push(node);
-            }
-        }
-        
-        // Collect from modules recursively
-        for (const module of this.modules) {
-            leaves.push(...module.getLeafNodes());
-        }
-        
-        return leaves;
-    }
-
-    /**
      * Enable physics-based layout.
+     * Only simulates entities and connections in visible layers for performance.
      */
     enablePhysics(): void {
+        if (this.entities.length === 0 && !this.root) return;
+        
         this.isPhysicsEnabled = true;
-        // Pass both regular nodes and modules to physics engine
-        // Modules are root-level entities that should have physics applied
-        this.physicsEngine.init(this.getAllLeafNodes(), this.edges, this.hyperEdges, this.modules);
-        this.physicsEngine.start();
+        
+        // For flat list API, find a root (or create implicit one)
+        let root = this.root;
+        if (!root && this.entities.length > 0) {
+            // Create implicit root for physics simulation
+            root = new Entity('_implicit_root', {
+                children: this.entities,
+                implicit: true
+            });
+        }
+        
+        if (root) {
+            this.physicsEngine.init(root);
+            this.physicsEngine.setConnections(this.getAllConnections());
+            this.physicsEngine.start();
+        }
+    }
+
+    /**
+     * Update physics to only simulate visible layers.
+     * Called during animation to filter based on current zoom.
+     */
+    private updatePhysicsForVisibleLayers(): void {
+        if (!this.isPhysicsEnabled) return;
+        
+        const visibleEntities = this.layerDetailManager.getVisibleEntities(
+            this.entities,
+            this.zoomManager.zoomLevel
+        );
+        
+        this.physicsEngine.setVisibleEntities(visibleEntities);
     }
 
     /**
@@ -323,18 +427,19 @@ export class GraphManager {
     }
 
     /**
-     * Set the zoom level.
+     * Set zoom level.
      */
-    setZoom(level: number, animate: boolean = true): void {
-        this.zoomManager.setZoom(level, animate);
+    setZoom(level: number, animate: boolean = true, focusPoint?: { x: number; y: number }): void {
+        this.zoomManager.setZoom(level, animate, focusPoint);
     }
 
     /**
-     * Adjust zoom by a delta.
+     * Adjust zoom by delta, optionally towards a focus point (e.g., mouse position).
      */
-    adjustZoom(delta: number): void {
+    adjustZoom(delta: number, focusPoint?: { x: number; y: number }): void {
         const newZoom = this.zoomManager.zoomLevel + delta;
-        this.setZoom(newZoom, true);
+        // Short animation for smooth but responsive zoom
+        this.setZoom(newZoom, true, focusPoint);
     }
 
     /**
@@ -345,14 +450,44 @@ export class GraphManager {
     }
 
     /**
-     * Bind mouse/touch interactions to the canvas.
+     * Collapse a composite entity.
+     */
+    collapseEntity(composite: Entity): void {
+        composite.collapse();
+        this.updateSummaryEdges(composite);
+    }
+
+    /**
+     * Expand a composite entity.
+     */
+    expandEntity(composite: Entity): void {
+        composite.expand();
+        this.updateSummaryEdges(composite);
+    }
+
+    /**
+     * Update summary edges for a composite.
+     */
+    private updateSummaryEdges(composite: Entity): void {
+        if (composite.collapsed) {
+            composite.updateSummaryEdges();
+        }
+    }
+
+    /**
+     * Bind mouse/touch interactions.
      */
     private bindInteractions(): void {
-        // Zoom with mouse wheel
         this.canvas.addEventListener('wheel', (e: WheelEvent) => {
             e.preventDefault();
-            const delta = e.deltaY > 0 ? -0.25 : 0.25;
-            this.adjustZoom(delta);
+            const delta = e.deltaY > 0 ? -0.1 : 0.1;
+            
+            // Get mouse position in canvas coordinates
+            const rect = this.canvas.getBoundingClientRect();
+            const mouseCanvasX = e.clientX - rect.left;
+            const mouseCanvasY = e.clientY - rect.top;
+            
+            this.adjustZoom(delta, { x: mouseCanvasX, y: mouseCanvasY });
         });
 
         const getWorldCoords = (e: MouseEvent) => {
@@ -364,59 +499,46 @@ export class GraphManager {
             return { worldX, worldY };
         };
 
-        const getNodeAtPoint = (worldX: number, worldY: number): Node | null => {
-            let closest: Node | null = null;
+        const getEntityAtPoint = (worldX: number, worldY: number): Entity | null => {
+            let closest: Entity | null = null;
             let closestDist = Infinity;
             
-            // Check all top-level nodes and modules
-            const allTopLevel = this.nodes.concat(this.modules as any);
-            
-            for (const node of allTopLevel) {
-                if (node.implicit) continue;
+            for (const entity of this.getAllEntities()) {
+                if (entity.implicit) continue;
                 
-                let hitRadius = node.radius * 2.5;
-                // Modules have larger hit area
-                if (node instanceof Module) {
-                    hitRadius = node.radius * 1.5 * 2;
+                // Check if entity is visible (opacity > 0)
+                const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
+                if (detailState.opacity <= 0) {
+                    continue;
                 }
                 
-                const dist = Math.hypot(node.x - worldX, node.y - worldY);
-                if (dist < hitRadius && dist < closestDist) {
-                    closest = node;
+                // Check if point is inside the entity's hitbox
+                if (!entity.shapeObject.containsPoint(worldX, worldY, entity.x, entity.y)) {
+                    continue;
+                }
+                
+                // Calculate distance from point to entity center for sorting
+                const dist = Math.hypot(entity.x - worldX, entity.y - worldY);
+                if (dist < closestDist) {
+                    closest = entity;
                     closestDist = dist;
-                }
-            }
-            
-            // Check children of modules (can override parent if closer)
-            for (const module of this.modules) {
-                for (const child of module.children) {
-                    if (child.implicit || child instanceof Module) continue;
-                    
-                    const dist = Math.hypot(child.x - worldX, child.y - worldY);
-                    const hitRadius = child.radius * 2.5;
-                    if (dist < hitRadius && dist < closestDist) {
-                        closest = child;
-                        closestDist = dist;
-                    }
                 }
             }
             
             return closest;
         };
 
-                // Mouse down for selection and dragging
         this.canvas.addEventListener('mousedown', (e: MouseEvent) => {
             const { worldX, worldY } = getWorldCoords(e);
-            const draggable = getNodeAtPoint(worldX, worldY);
+            const entity = getEntityAtPoint(worldX, worldY);
 
-            if (draggable) {
-                this.draggedNode = draggable;
-                this.interactionManager.selectNode(draggable, e.ctrlKey || e.metaKey);
+            if (entity) {
+                this.draggedNode = entity;
+                this.interactionManager.selectNode(entity, e.ctrlKey || e.metaKey);
                 if (this.isPhysicsEnabled) {
-                    this.physicsEngine.pinNode(draggable, draggable.x, draggable.y);
+                    this.physicsEngine.pinNode(entity, entity.x, entity.y);
                 }
             } else {
-                // Start panning when clicking empty space
                 this.isPanning = true;
                 this.panStartX = e.clientX;
                 this.panStartY = e.clientY;
@@ -426,7 +548,6 @@ export class GraphManager {
             }
         });
 
-        // Mouse move for dragging and hover
         this.canvas.addEventListener('mousemove', (e: MouseEvent) => {
             const { worldX, worldY } = getWorldCoords(e);
 
@@ -447,13 +568,11 @@ export class GraphManager {
                 return;
             }
 
-            // Hover detection
-            const node = getNodeAtPoint(worldX, worldY);
-            this.interactionManager.hoverNode(node);
-            this.canvas.style.cursor = node ? 'pointer' : 'default';
+            const entity = getEntityAtPoint(worldX, worldY);
+            this.interactionManager.hoverNode(entity);
+            this.canvas.style.cursor = entity ? 'pointer' : 'default';
         });
 
-        // Mouse up to stop dragging
         this.canvas.addEventListener('mouseup', () => {
             if (this.isPanning) {
                 this.isPanning = false;
@@ -465,56 +584,62 @@ export class GraphManager {
             this.draggedNode = null;
         });
 
-        // Right-click for context menu or module collapse/expand
         this.canvas.addEventListener('contextmenu', (e: MouseEvent) => {
             e.preventDefault();
             const { worldX, worldY } = getWorldCoords(e);
 
-            for (const module of this.modules) {
-                const dist = Math.hypot(module.x - worldX, module.y - worldY);
-                if (dist < module.radius * 1.5 * 2) {
-                    if (module.collapsed) {
-                        this.expandModule(module);
+            for (const composite of this.getAllComposites()) {
+                const dist = Math.hypot(composite.x - worldX, composite.y - worldY);
+                if (dist < composite.radius * 1.5 * 2) {
+                    if (composite.collapsed) {
+                        this.expandEntity(composite);
                     } else {
-                        this.collapseModule(module);
+                        this.collapseEntity(composite);
                     }
                     return;
                 }
             }
         });
+    }
 
-        // Zoom manager event callback
-        this.zoomManager.onZoomChange = (zoomLevel: number) => {
-            // Update camera scale based on zoom level
-            // Zoom level 0 = 1x, each +1 = 2x, each -1 = 0.5x
-            const cameraScale = Math.pow(2, zoomLevel);
-            this.renderer.setCamera(cameraScale, this.renderer.offsetX, this.renderer.offsetY);
-            this.updateVisibility();
-        };
-    }    /**
-     * Update node and edge visibility based on zoom level.
+    /**
+     * Update visibility based on zoom.
      */
     private updateVisibility(): void {
-        for (const node of this.nodes) {
-            const vis = this.zoomManager.getNodeVisibility(node);
-            node.setOpacity(vis);
+        // Get the visible layer range at current zoom
+        const visibleLayerRange = this.layerDetailManager.getVisibleLayerRange(this.zoomManager.zoomLevel);
+        
+        for (const entity of this.getAllEntities()) {
+            // Entity is visible if it's within the visible layer range
+            const isInLayerRange = entity.layer >= visibleLayerRange.min && entity.layer <= visibleLayerRange.max;
+            
+            if (isInLayerRange) {
+                const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
+                entity.setOpacity(detailState.opacity);
+                entity.visible = true;
+            } else {
+                entity.setOpacity(0);
+                entity.visible = false;
+            }
         }
 
-        for (const edge of this.edges) {
-            const vis = this.zoomManager.getNodeVisibility(edge.source);
-            edge.setOpacity(vis);
+        for (const conn of this.getAllConnections()) {
+            // Connection is visible if both its sources and targets are in visible layer range
+            const sourceVisible = conn.sources.some(s => s.layer >= visibleLayerRange.min && s.layer <= visibleLayerRange.max);
+            const targetVisible = conn.targets.some(t => t.layer >= visibleLayerRange.min && t.layer <= visibleLayerRange.max);
+            
+            if (sourceVisible || targetVisible) {
+                conn.setOpacity(1.0);
+            } else {
+                conn.setOpacity(0);
+            }
         }
 
-        for (const hyperEdge of this.hyperEdges) {
-            const vis = hyperEdge.getVisibility(this.zoomManager.zoomLevel);
-            hyperEdge.setOpacity(vis);
-        }
-
-        // Auto-expand/collapse modules based on zoom
-        for (const module of this.modules) {
-            if (this.zoomManager.shouldAutoExpand(module, 0.5)) {
-                if (module.collapsed) {
-                    this.expandModule(module);
+        // Auto-expand/collapse composites based on zoom
+        for (const composite of this.getAllComposites()) {
+            if (this.zoomManager.shouldAutoExpand(composite, 0.5)) {
+                if (composite.collapsed) {
+                    this.expandEntity(composite);
                 }
             }
         }
@@ -524,60 +649,105 @@ export class GraphManager {
      * Update and render the scene.
      */
     update(): void {
-        // Update physics
-        if (this.isPhysicsEnabled) {
-            // Physics engine handles its own animation loop
-        }
-
-        // Update visibility
         this.updateVisibility();
-
-        // Render
+        this.updatePhysicsForVisibleLayers();
+        this.updateZoomDebug();
         this.renderer.clear();
 
-        // Draw all modules first (background)
-        for (const module of this.modules) {
-            this.renderer.drawModule(module);
+        const visibleConnections = this.getVisibleConnections();
+        const visibleNodes = this.getVisibleNodes();
+
+        // Group nodes and edges by layer
+        const nodesByLayer = new Map<number, Entity[]>();
+        const connectionsByLayer = new Map<number, Connection[]>();
+        
+        for (const node of visibleNodes) {
+            if (!nodesByLayer.has(node.layer)) {
+                nodesByLayer.set(node.layer, []);
+            }
+            nodesByLayer.get(node.layer)!.push(node);
+        }
+        
+        for (const conn of visibleConnections) {
+            let maxLayer = 0;
+            for (const source of conn.sources) {
+                maxLayer = Math.max(maxLayer, source.layer);
+            }
+            for (const target of conn.targets) {
+                maxLayer = Math.max(maxLayer, target.layer);
+            }
+            if (!connectionsByLayer.has(maxLayer)) {
+                connectionsByLayer.set(maxLayer, []);
+            }
+            connectionsByLayer.get(maxLayer)!.push(conn);
         }
 
-        // Draw edges
-        for (const edge of this.getVisibleEdges()) {
-            this.renderer.drawEdge(edge, this.modules);
-        }
+        // Get all unique layers and sort descending (highest layer first = rendered last = on top)
+        const allLayers = Array.from(new Set([...nodesByLayer.keys(), ...connectionsByLayer.keys()])).sort((a, b) => b - a);
 
-        // Draw summary edges for collapsed modules
-        for (const module of this.modules) {
-            if (module.collapsed) {
-                for (const summaryEdge of module.summaryEdges) {
-                    this.renderer.drawEdge(summaryEdge);
+        // Draw each layer: edges then nodes
+        for (const layer of allLayers) {
+            // Draw edges at this layer
+            const edgesAtLayer = connectionsByLayer.get(layer) || [];
+            for (const conn of edgesAtLayer) {
+                let totalLayer = 0;
+                let count = 0;
+                for (const source of conn.sources) {
+                    totalLayer += source.layer;
+                    count++;
+                }
+                for (const target of conn.targets) {
+                    totalLayer += target.layer;
+                    count++;
+                }
+                const avgLayer = count > 0 ? totalLayer / count : 0;
+                const tempEntity = { layer: Math.round(avgLayer), x: 0, y: 0 } as Entity;
+                const detailState = this.layerDetailManager.getDetailStateAtZoom(tempEntity, this.zoomManager.zoomLevel);
+                this.renderer.drawConnection(conn, detailState);
+            }
+
+            // Draw all nodes at this layer (composites and regular nodes together)
+            const nodesAtLayer = nodesByLayer.get(layer) || [];
+            for (const entity of nodesAtLayer) {
+                const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
+                if (entity.isComposite()) {
+                    this.renderer.drawNode(entity, detailState);
+                } else {
+                    this.renderer.drawNode(entity, detailState);
                 }
             }
         }
 
-        // Draw hyperedges
-        for (const hyperEdge of this.getVisibleHyperEdges()) {
-            this.renderer.drawHyperEdge(hyperEdge);
+        // Draw summary connections for collapsed composites
+        for (const composite of this.getAllComposites()) {
+            if (composite.collapsed) {
+                for (const summaryConn of composite.summaryConnections) {
+                    const tempEntity = { layer: composite.layer, x: 0, y: 0 } as Entity;
+                    const detailState = this.layerDetailManager.getDetailStateAtZoom(tempEntity, this.zoomManager.zoomLevel);
+                    this.renderer.drawConnection(summaryConn, detailState);
+                }
+            }
         }
 
-        // Draw nodes
-        for (const node of this.getVisibleNodes()) {
-            this.renderer.drawNode(node);
-        }
+        // Render the scene
+        this.renderer.render();
     }
 
     /**
-     * Start the animation loop.
+     * Start animation loop.
      */
     start(): void {
+        let frameCount = 0;
         const animate = () => {
             this.update();
             this.animationFrameId = requestAnimationFrame(animate);
+            frameCount++;
         };
         animate();
     }
 
     /**
-     * Stop the animation loop.
+     * Stop animation loop.
      */
     stop(): void {
         if (this.animationFrameId !== null) {
@@ -587,7 +757,7 @@ export class GraphManager {
     }
 
     /**
-     * Get interaction manager (for event listening).
+     * Get interaction manager.
      */
     getInteractionManager(): InteractionManager {
         return this.interactionManager;
@@ -605,5 +775,48 @@ export class GraphManager {
      */
     getPhysicsEngine(): PhysicsEngine {
         return this.physicsEngine;
+    }
+
+    /**
+     * Get layer detail manager.
+     */
+    getLayerDetailManager(): LayerDetailManager {
+        return this.layerDetailManager;
+    }
+
+    /**
+     * Toggle zoom debug widget visibility.
+     */
+    toggleZoomDebug(): void {
+        if (this.zoomDebugWidget) {
+            this.zoomDebugWidget.destroy();
+            this.zoomDebugWidget = null;
+        } else {
+            this.zoomDebugWidget = new ZoomDebugWidget(this.layerDetailManager.config.layerScaleFactor);
+        }
+    }
+
+    /**
+     * Update zoom debug widget with current state.
+     */
+    private updateZoomDebug(): void {
+        if (!this.zoomDebugWidget) return;
+
+        const zoomLevel = this.zoomManager.zoomLevel;
+        const currentLayer = this.layerDetailManager.getPrimaryLayerAtZoom(zoomLevel);
+        
+        // Create a temporary entity at the current layer to calculate its opacity
+        const tempEntity = { layer: currentLayer } as Entity;
+        const detailState = this.layerDetailManager.getDetailStateAtZoom(tempEntity, zoomLevel);
+        const opacity = detailState.opacity;
+
+        this.zoomDebugWidget.update(
+            zoomLevel,
+            currentLayer,
+            opacity,
+            this.zoomManager.minZoom,
+            this.zoomManager.maxZoom,
+            this.layerDetailManager.config.layerScaleFactor
+        );
     }
 }

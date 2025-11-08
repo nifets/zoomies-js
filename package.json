@@ -13,7 +13,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "generate-structure": "node scripts/generate-structure.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

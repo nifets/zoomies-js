@@ -1,34 +1,34 @@
 /**
  * Main entry point for Zoomies.js library.
+ * Unified hierarchy: Entity (atomic/composite) + Connection (all relationships).
  */
-export { Node } from './core/Node';
-export { Edge } from './core/Edge';
-export { HyperEdge } from './core/HyperEdge';
-export { Module } from './core/Module';
+export { Entity } from './core/Entity';
+export { Connection } from './core/Connection';
 export { Renderer } from './rendering/Renderer';
 export { InteractionManager } from './managers/InteractionManager';
 export { ZoomManager } from './managers/ZoomManager';
 export { PhysicsEngine } from './managers/PhysicsEngine';
+export type { PhysicsConfig } from './managers/PhysicsEngine';
 export { GraphManager } from './managers/GraphManager';
+export { validateCompositeSize, validateCompositeHierarchy } from './utils/validation';
 
 // Create a convenience class for quick initialization
 import { GraphManager } from './managers/GraphManager';
-import { Node } from './core/Node';
-import { Edge } from './core/Edge';
-import { HyperEdge } from './core/HyperEdge';
-import { Module } from './core/Module';
+import { Entity } from './core/Entity';
+import { Connection } from './core/Connection';
+import type { PhysicsConfig } from './managers/PhysicsEngine';
+import { validateCompositeHierarchy } from './utils/validation';
 
 export class Zoomies {
     manager: GraphManager;
 
     constructor(
         selector: string,
+        entities: Entity | Entity[],
+        connections: Connection[] = [],
         options: {
-            nodes?: Node[];
-            edges?: Edge[];
-            hyperEdges?: HyperEdge[];
-            modules?: Module[];
             enablePhysics?: boolean;
+            physicsConfig?: PhysicsConfig;
         } = {}
     ) {
         const canvas = document.querySelector(selector) as HTMLCanvasElement;
@@ -36,74 +36,40 @@ export class Zoomies {
             throw new Error(`Canvas element not found: ${selector}`);
         }
 
-        this.manager = new GraphManager(canvas);
+        this.manager = new GraphManager(canvas, options.physicsConfig);
+        
+        // Normalize single entity (legacy) to array
+        const entityList = Array.isArray(entities) ? entities : [entities];
         
         // Initialize asynchronously
-        this.init(options).catch(err => {
+        this.init(entityList, connections, options).catch(err => {
             console.error('Failed to initialize Zoomies:', err);
         });
     }
 
-    private async init(options: {
-        nodes?: Node[];
-        edges?: Edge[];
-        hyperEdges?: HyperEdge[];
-        modules?: Module[];
-        enablePhysics?: boolean;
-    }): Promise<void> {
+    private async init(entities: Entity[], connections: Connection[], options: { enablePhysics?: boolean }): Promise<void> {
+        console.log('[Zoomies] Starting initialization...');
+        
+        // Validate composite hierarchy
+        for (const entity of entities) {
+            validateCompositeHierarchy(entity);
+        }
+        
         await this.manager.init();
+        console.log('[Zoomies] Manager initialized');
 
-        // Add initial nodes, edges, hyperedges
-        if (options.nodes) {
-            options.nodes.forEach(node => this.manager.addNode(node));
-        }
-        if (options.edges) {
-            options.edges.forEach(edge => this.manager.addEdge(edge));
-        }
-        if (options.hyperEdges) {
-            options.hyperEdges.forEach(he => this.manager.addHyperEdge(he));
-        }
-        if (options.modules) {
-            options.modules.forEach(m => this.manager.addModule(m));
-        }
+        // Build graph from flat lists
+        this.manager.buildGraph(entities, connections);
+        console.log('[Zoomies] Graph built:', entities.length, 'entities,', connections.length, 'connections');
 
         if (options.enablePhysics) {
+            console.log('[Zoomies] Enabling physics');
             this.manager.enablePhysics();
         }
 
+        console.log('[Zoomies] Starting render loop');
         this.manager.start();
-    }
-
-    addNode(node: Node): void {
-        this.manager.addNode(node);
-    }
-
-    removeNode(node: Node): void {
-        this.manager.removeNode(node);
-    }
-
-    addEdge(edge: Edge): void {
-        this.manager.addEdge(edge);
-    }
-
-    removeEdge(edge: Edge): void {
-        this.manager.removeEdge(edge);
-    }
-
-    addHyperEdge(hyperEdge: HyperEdge): void {
-        this.manager.addHyperEdge(hyperEdge);
-    }
-
-    removeHyperEdge(hyperEdge: HyperEdge): void {
-        this.manager.removeHyperEdge(hyperEdge);
-    }
-
-    addModule(module: Module): void {
-        this.manager.addModule(module);
-    }
-
-    removeModule(module: Module): void {
-        this.manager.removeModule(module);
+        console.log('[Zoomies] Initialization complete');
     }
 
     enablePhysics(): void {
@@ -126,12 +92,16 @@ export class Zoomies {
         this.manager.getInteractionManager().on(event, callback);
     }
 
-    collapseModule(module: Module): void {
-        this.manager.collapseModule(module);
+    collapseEntity(composite: Entity): void {
+        this.manager.collapseEntity(composite);
     }
 
-    expandModule(module: Module): void {
-        this.manager.expandModule(module);
+    expandEntity(composite: Entity): void {
+        this.manager.expandEntity(composite);
+    }
+
+    toggleZoomDebug(): void {
+        this.manager.toggleZoomDebug();
     }
 
     destroy(): void {

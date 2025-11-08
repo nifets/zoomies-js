@@ -1,83 +1,194 @@
-import { Node } from '../core/Node';
-import { Edge } from '../core/Edge';
-import { HyperEdge } from '../core/HyperEdge';
-import { Module } from '../core/Module';
+import { Entity } from '../core/Entity';
+import { Connection } from '../core/Connection';
+
+/**
+ * Physics engine configuration options.
+ */
+export interface PhysicsConfig {
+    // Base physics constants
+    baseRepulsionStrength?: number;
+    targetLinkDistance?: number;
+    velocityDamping?: number;
+    
+    // Physics iterations per frame (for force propagation)
+    substeps?: number;
+    
+    // Minimum distance multipliers (relative to sum of radii)
+    minNodeDistanceMultiplier?: number;
+    
+    // Force strength multipliers for different scenarios
+    overlapRepulsionStrengthMultiplier?: number;
+    moderateDistanceRepulsionStrengthMultiplier?: number;
+    moderateDistanceThresholdMultiplier?: number;
+    
+    // Internal composite physics
+    centerAttractionStrength?: number;
+    edgeAttractionStrength?: number;
+    branchingEdgeAttractionStrength?: number;
+    boundaryMargin?: number;
+    
+    // Velocity constraints
+    minVelocityThreshold?: number;
+    maxVelocityCap?: number;
+    
+    // Random initialization ranges
+    initialPositionRange?: number;
+    initialVelocityRange?: number;
+}
+
+/**
+ * Default physics configuration.
+ */
+const DEFAULT_PHYSICS_CONFIG: Required<PhysicsConfig> = {
+    baseRepulsionStrength: 50,
+    targetLinkDistance: 60,
+    velocityDamping: 0.01,
+    substeps: 3,
+    minNodeDistanceMultiplier: 2,
+    overlapRepulsionStrengthMultiplier: 8.0,
+    moderateDistanceRepulsionStrengthMultiplier: 1.0,
+    moderateDistanceThresholdMultiplier: 2,
+    centerAttractionStrength: 0.1,
+    edgeAttractionStrength: 0.1,
+    branchingEdgeAttractionStrength: 0.0,
+    boundaryMargin: 0.9,
+    minVelocityThreshold: 0.05,
+    maxVelocityCap: 3,
+    initialPositionRange: 400,
+    initialVelocityRange: 1
+};
 
 /**
  * Physics engine for force-directed layout.
- * Handles simulation updates and node positioning.
+ * Uses layer-based simulation where all entities at the same hierarchy level
+ * are simulated together in their own "universe".
  */
 export class PhysicsEngine {
-    nodes: Node[];
-    edges: Edge[];
-    hyperEdges: HyperEdge[];
+    root: Entity | null;
+    layers: Entity[][] = []; // layers[0] = leaf nodes, layers[1] = their parent composites, etc.
+    connections: Connection[];
     isRunning: boolean;
-    strength: number;
-    distance: number;
-    damping: number;
-    centerForce: number;
     animationFrameId: number | null;
-    pinnedNodes: Set<Node>;
-    modules: any[]; // Module array for hierarchical physics
+    pinnedNodes: Set<Entity>;
+    visibleEntities: Set<Entity>;
+    config: Required<PhysicsConfig>;
+    crossLayerConnections: Connection[]; // Connections between entities in different layers
 
-    // Physics constants
-    private readonly MODULE_REPULSION_STRENGTH = 1.0;
-    private readonly CHILD_REPULSION_STRENGTH = 0.08;
-    private readonly CENTER_ATTRACTION_STRENGTH = 0.01;
-    private readonly EDGE_ATTRACTION_STRENGTH = 0.001;
-    private readonly BORDER_ATTRACTION_STRENGTH = 0.001;
-    private readonly BORDER_ATTRACTION_MIN_DISTANCE = 10;
-    private readonly BOUNDARY_MARGIN = 0.9;
-
-    constructor() {
-        this.nodes = [];
-        this.edges = [];
-        this.hyperEdges = [];
+    constructor(config: PhysicsConfig = {}) {
+        this.root = null;
+        this.layers = [];
+        this.connections = [];
         this.isRunning = false;
-        this.strength = 80; // Reduced from 150 - was too strong
-        this.distance = 60; // Target link distance
-        this.damping = 0.92; // Increased from 0.88 - more dampening for stability
-        this.centerForce = 0.01; // Reduced from 0.02
         this.animationFrameId = null;
         this.pinnedNodes = new Set();
-        this.modules = [];
+        this.visibleEntities = new Set();
+        this.crossLayerConnections = [];
+        
+        // Merge user config with defaults
+        this.config = { ...DEFAULT_PHYSICS_CONFIG, ...config };
     }
 
     /**
-     * Initialize the physics simulation with nodes and edges.
+     * Initialize the physics simulation with the root entity.
+     * Organizes entities into layers based on their depth in the hierarchy.
      */
-    init(nodes: Node[], edges: Edge[], hyperEdges: HyperEdge[] = [], modules: any[] = []): void {
-        this.nodes = nodes.filter(n => !n.implicit);
-        this.edges = edges;
-        this.hyperEdges = hyperEdges;
-        this.modules = modules;
-
-        // Initialize top-level nodes randomly if not set
-        this.nodes.forEach(node => {
-            if (node.x === 0 && node.y === 0) {
-                node.x = Math.random() * 400 - 200;
-                node.y = Math.random() * 400 - 200;
-            }
-            node.vx = (Math.random() - 0.5) * 2;
-            node.vy = (Math.random() - 0.5) * 2;
-        });
-
-        // Initialize modules with velocities
-        this.modules.forEach(module => {
-            module.vx = (Math.random() - 0.5) * 2;
-            module.vy = (Math.random() - 0.5) * 2;
-            
-            // Initialize child positions INSIDE the module
-            for (const child of module.children) {
-                if (child.x === 0 && child.y === 0) {
-                    const pos = module.shapeObject.getRandomInteriorPoint(module.x, module.y);
-                    child.x = pos.x;
-                    child.y = pos.y;
+    init(root: Entity): void {
+        this.root = root;
+        this.layers = [];
+        
+        // Traverse hierarchy and group entities by depth level
+        this.buildLayers(root, 0);
+        
+        // Initialize positions for all entities
+        for (const layer of this.layers) {
+            for (const entity of layer) {
+                if (entity.x === 0 && entity.y === 0) {
+                    entity.x = Math.random() * this.config.initialPositionRange - this.config.initialPositionRange / 2;
+                    entity.y = Math.random() * this.config.initialPositionRange - this.config.initialPositionRange / 2;
                 }
-                child.vx = (Math.random() - 0.5) * 2;
-                child.vy = (Math.random() - 0.5) * 2;
+                entity.vx = (Math.random() - 0.5) * this.config.initialVelocityRange;
+                entity.vy = (Math.random() - 0.5) * this.config.initialVelocityRange;
             }
-        });
+        }
+    }
+
+    /**
+     * Recursively build layers: group entities by their depth.
+     * Level 0: leaf nodes (Entity)
+     * Level 1: CompositeEntity containing level 0 entities
+     * Level N: CompositeEntity containing level N-1 entities
+     */
+    private buildLayers(entity: Entity, parentDepth: number): number {
+        if (entity.implicit) {
+            // Implicit entities don't increment depth - their children are at the parent's depth
+            if (entity.isComposite()) {
+                let maxChildDepth = parentDepth;
+                for (const child of entity.children) {
+                    const childDepth = this.buildLayers(child, parentDepth);
+                    maxChildDepth = Math.max(maxChildDepth, childDepth);
+                }
+                return maxChildDepth;
+            }
+            return parentDepth;
+        }
+
+        // Non-implicit entity - gets added to current layer
+        const depth = parentDepth;
+        if (!this.layers[depth]) {
+            this.layers[depth] = [];
+        }
+        this.layers[depth].push(entity);
+
+        // If this is a composite, its children are at depth+1
+        if (entity.isComposite()) {
+            let maxChildDepth = depth;
+            for (const child of entity.children) {
+                const childDepth = this.buildLayers(child, depth + 1);
+                maxChildDepth = Math.max(maxChildDepth, childDepth);
+            }
+            return maxChildDepth;
+        }
+
+        return depth;
+    }
+
+    /**
+     * Set connections for the physics simulation.
+     */
+    setConnections(connections: Connection[]): void {
+        this.connections = connections;
+        
+        // Identify cross-layer connections (edges between entities in different layers)
+        this.crossLayerConnections = [];
+        for (const conn of connections) {
+            if (conn.sources.length === 0 || conn.targets.length === 0) continue;
+            
+            const source = conn.sources[0];
+            const target = conn.targets[0];
+            
+            // Find which layers contain source and target
+            let sourceLayer = -1;
+            let targetLayer = -1;
+            
+            for (let i = 0; i < this.layers.length; i++) {
+                if (this.layers[i].includes(source)) sourceLayer = i;
+                if (this.layers[i].includes(target)) targetLayer = i;
+            }
+            
+            // If in different layers, it's a cross-layer connection
+            if (sourceLayer !== targetLayer && sourceLayer !== -1 && targetLayer !== -1) {
+                this.crossLayerConnections.push(conn);
+            }
+        }
+    }
+
+    /**
+     * Set the visible entities for physics simulation.
+     * Only entities in this set are simulated; others are frozen.
+     * Called per frame to filter based on zoom level.
+     */
+    setVisibleEntities(visibleEntities: Entity[]): void {
+        this.visibleEntities = new Set(visibleEntities);
     }
 
     /**
@@ -105,178 +216,220 @@ export class PhysicsEngine {
     private animate = (): void => {
         if (!this.isRunning) return;
 
-        this.simulationStep();
+        // Run multiple physics iterations per frame for better force propagation
+        for (let i = 0; i < this.config.substeps; i++) {
+            this.simulationStep();
+        }
         this.animationFrameId = requestAnimationFrame(this.animate);
     };
 
     /**
      * Perform one step of the physics simulation.
-     * Modular/stratified physics: each module is an independent universe.
+     * Simulates each layer independently: entities at the same depth interact with each other.
      */
     private simulationStep(): void {
-        // Step 1: Module-level physics (modules interact with each other)
-        for (let i = 0; i < this.modules.length; i++) {
-            for (let j = i + 1; j < this.modules.length; j++) {
-                const a = this.modules[i];
-                const b = this.modules[j];
-                if (this.pinnedNodes.has(a) || this.pinnedNodes.has(b)) continue;
-                this.applyRepulsion(a, b, this.MODULE_REPULSION_STRENGTH);
+        // Simulate each layer from bottom to top (leaves first, then containers)
+        for (let depth = 0; depth < this.layers.length; depth++) {
+            const layer = this.layers[depth];
+            if (layer && layer.length > 0) {
+                this.simulateLayer(layer, depth);
             }
         }
 
-        // Step 1.5: Module-level edge attractions
-        for (const edge of this.edges) {
-            if (this.pinnedNodes.has(edge.source) || this.pinnedNodes.has(edge.target)) continue;
-            // Check if this is a module-to-module edge
-            if (this.modules.includes(edge.source) && this.modules.includes(edge.target)) {
-                this.applyAttraction(edge.source, edge.target);
-            }
-        }
-
-        // Step 2: Within each module, run independent physics for children
-        for (const module of this.modules) {
-            this.simulateModuleInternal(module);
-        }
-
-        // Step 3: Update positions
+        // Update all positions
         this.updatePositions();
     }
 
     /**
-     * Run physics simulation within a single module (isolated universe).
+     * Simulate physics for all entities at a given layer/depth.
+     * All entities at the same depth are treated as peers in the same physics universe.
      */
-    private simulateModuleInternal(module: any): void {
-        const children = module.children.filter((c: Node) => !c.implicit);
-        
-        // Child-child repulsion (only within same module)
-        for (let i = 0; i < children.length; i++) {
-            for (let j = i + 1; j < children.length; j++) {
-                const a = children[i];
-                const b = children[j];
+    private simulateLayer(entities: Entity[], depth: number): void {
+        // Step 1: Repulsion between entities at this layer
+        for (let i = 0; i < entities.length; i++) {
+            for (let j = i + 1; j < entities.length; j++) {
+                const a = entities[i];
+                const b = entities[j];
                 if (this.pinnedNodes.has(a) || this.pinnedNodes.has(b)) continue;
-                this.applyRepulsion(a, b, this.CHILD_REPULSION_STRENGTH);
-            }
-        }
-
-        // Gentle attraction to module center (prevents drift)
-        for (const child of children) {
-            if (this.pinnedNodes.has(child)) continue;
-            const dx = module.x - child.x;
-            const dy = module.y - child.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > 0) {
-                const force = dist * this.CENTER_ATTRACTION_STRENGTH;
-                child.vx += (dx / dist) * force;
-                child.vy += (dy / dist) * force;
-            }
-        }
-
-        // Edges within module
-        for (const edge of this.edges) {
-            if (this.pinnedNodes.has(edge.source) || this.pinnedNodes.has(edge.target)) continue;
-            if (children.includes(edge.source) && children.includes(edge.target)) {
-                this.applyAttraction(edge.source, edge.target);
-            }
-        }
-
-        // Cross-module edge border attraction
-        // Attract nodes toward border exit points for edges leaving the module
-        for (const edge of this.edges) {
-            if (this.pinnedNodes.has(edge.source) || this.pinnedNodes.has(edge.target)) continue;
-            
-            // Edge from child inside this module to external node
-            if (children.includes(edge.source) && !children.includes(edge.target)) {
-                const borderPoint = module.shapeObject.getBorderPoint(
-                    module.x, module.y,
-                    edge.target.x, edge.target.y
-                );
-                const dx = borderPoint.x - edge.source.x;
-                const dy = borderPoint.y - edge.source.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist > this.BORDER_ATTRACTION_MIN_DISTANCE) {
-                    const force = dist * this.BORDER_ATTRACTION_STRENGTH;
-                    edge.source.vx += (dx / dist) * force;
-                    edge.source.vy += (dy / dist) * force;
-                }
-            }
-            
-            // Edge from external node to child inside this module
-            if (children.includes(edge.target) && !children.includes(edge.source)) {
-                const borderPoint = module.shapeObject.getBorderPoint(
-                    module.x, module.y,
-                    edge.source.x, edge.source.y
-                );
-                const dx = borderPoint.x - edge.target.x;
-                const dy = borderPoint.y - edge.target.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist > this.BORDER_ATTRACTION_MIN_DISTANCE) {
-                    const force = dist * this.BORDER_ATTRACTION_STRENGTH;
-                    edge.target.vx += (dx / dist) * force;
-                    edge.target.vy += (dy / dist) * force;
-                }
-            }
-        }
-
-        // Boundary constraints - hard constraint to keep children inside
-        for (const child of children) {
-            if (this.pinnedNodes.has(child)) continue;
-            this.enforceModuleBoundary(child, module);
-        }
-    }
-
-    /**
-     * Update positions for all nodes (modules and their children).
-     */
-    private updatePositions(): void {
-        // Update module positions
-        for (const module of this.modules) {
-            if (this.pinnedNodes.has(module)) {
-                module.vx = 0;
-                module.vy = 0;
-                continue;
-            }
-
-            module.vx *= this.damping;
-            module.vy *= this.damping;
-            module.x += module.vx;
-            module.y += module.vy;
-
-            if (Math.abs(module.vx) < 0.001 && Math.abs(module.vy) < 0.001) {
-                module.vx = 0;
-                module.vy = 0;
-            }
-        }
-
-        // Update child positions
-        for (const module of this.modules) {
-            for (const child of module.children) {
-                if (this.pinnedNodes.has(child)) {
-                    child.vx = 0;
-                    child.vy = 0;
+                
+                // Skip invisible entities
+                if (!this.visibleEntities.has(a) || !this.visibleEntities.has(b)) continue;
+                
+                // Skip repulsion between parent and direct children (handled by boundary constraint)
+                if ((a.isComposite() && a.children.includes(b)) || 
+                    (b.isComposite() && b.children.includes(a))) {
                     continue;
                 }
+                
+                // All entities use same repulsion (unified model)
+                this.applyRepulsion(a, b, 1.0);
+            }
+        }
 
-                child.vx *= this.damping;
-                child.vy *= this.damping;
-                child.x += child.vx;
-                child.y += child.vy;
+        // Step 2: Apply attractions along connections
+        for (const connection of this.connections) {
+            if (connection.sources.length === 0 || connection.targets.length === 0) continue;
+            if (connection.hidden) {
+                // console.log(`[PhysicsEngine] Skipping hidden connection: ${connection.id}`);
+                continue;
+            }
+            
+            // Skip synthetic edges entirely - they're just visual representations
+            if (connection.attributes.synthetic) {
+                // console.log(`[PhysicsEngine] Skipping synthetic connection: ${connection.id}`);
+                continue;
+            }
+            
+            const source = connection.sources[0];
+            const target = connection.targets[0];
+            
+            // Only apply if both are in this layer
+            if (entities.includes(source) && entities.includes(target)) {
+                // console.log(`[PhysicsEngine] Applying attraction on connection: ${connection.id}`);
+                this.applyAttraction(source, target, false);
+            }
+        }
 
-                if (Math.abs(child.vx) < 0.001 && Math.abs(child.vy) < 0.001) {
-                    child.vx = 0;
-                    child.vy = 0;
+        // Step 3: Center attraction for children to parent
+        // Children at this layer should be attracted to their parent's center
+        for (const entity of entities) {
+            if (this.pinnedNodes.has(entity)) continue;
+            if (!this.visibleEntities.has(entity)) continue;
+            
+            // Find parent (entity at layer depth-1 that contains this entity as a child)
+            if (depth > 0 && this.layers[depth - 1]) {
+                for (const potentialParent of this.layers[depth - 1]) {
+                    if (potentialParent.isComposite() && potentialParent.children.includes(entity)) {
+                        // This is the parent - attract child to parent center
+                        const dx = potentialParent.x - entity.x;
+                        const dy = potentialParent.y - entity.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (dist > 0) {
+                            // Stronger parent attraction - child should primarily be attracted to parent
+                            const sizeScale = entity.radius / 15;
+                            const force = dist * this.config.centerAttractionStrength * 0.5; // 50% of normal strength
+                            entity.vx += (dx / dist) * force;
+                            entity.vy += (dy / dist) * force;
+                        }
+                        break; // Found parent, no need to search further
+                    }
                 }
             }
         }
+
+        // Step 3b: Attraction to branching points for inter-composite edges
+        // Nodes with edges to other composites are attracted toward the branching point
+        for (const connection of this.connections) {
+            if (connection.hidden || connection.attributes.synthetic) continue;
+            if (connection.sources.length === 0 || connection.targets.length === 0) continue;
+            
+            const source = connection.sources[0];
+            const target = connection.targets[0];
+            
+            // Only process inter-composite edges
+            if (!source.parent || !target.parent || source.parent === target.parent) continue;
+            if (source.parent.implicit || target.parent.implicit) continue;
+            
+            // Source is in this layer and has a parent
+            if (!entities.includes(source) || !this.visibleEntities.has(source)) continue;
+            
+            const sourceParent = source.parent as Entity;
+            
+            // Calculate branching point: where the line from parent to target parent
+            // intersects the source parent's boundary
+            const dx = target.parent.x - sourceParent.x;
+            const dy = target.parent.y - sourceParent.y;
+            const distToTarget = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distToTarget > 0) {
+                // Get the border point in the direction of target parent
+                const branchPoint = sourceParent.shapeObject.getBorderPoint(
+                    sourceParent.x, sourceParent.y,
+                    target.parent.x, target.parent.y
+                );
+                
+                // Attract source node toward this branching point
+                const bdx = branchPoint.x - source.x;
+                const bdy = branchPoint.y - source.y;
+                const bDist = Math.sqrt(bdx * bdx + bdy * bdy);
+                
+                if (bDist > 0 && this.config.branchingEdgeAttractionStrength > 0) {
+                    const force = bDist * this.config.branchingEdgeAttractionStrength;
+                    source.vx += (bdx / bDist) * force;
+                    source.vy += (bdy / bDist) * force;
+                }
+            }
+        }
+
+        // Step 4: Layer-level center attraction (prevents layer drift)
+        // Only apply to top-level nodes (those without parents)
+        // Child nodes are only attracted to their parent's center (Step 3)
+        let centerX = 0, centerY = 0;
+        let avgRadius = 0;
+        let topLevelCount = 0;
+        
+        for (const entity of entities) {
+            if (!this.visibleEntities.has(entity)) continue;
+            
+            // Only count top-level nodes (no parent at all)
+            if (!entity.parent || !entity.parent.isComposite()) {
+                centerX += entity.x;
+                centerY += entity.y;
+                avgRadius += entity.radius;
+                topLevelCount++;
+            }
+        }
+        
+        if (topLevelCount > 0) {
+            centerX /= topLevelCount;
+            centerY /= topLevelCount;
+            avgRadius /= topLevelCount;
+        }
+
+        for (const entity of entities) {
+            if (this.pinnedNodes.has(entity) || topLevelCount < 2) continue;
+            if (!this.visibleEntities.has(entity)) continue;
+            
+            // Only apply to top-level nodes
+            if (entity.parent && entity.parent.isComposite()) continue;
+            
+            const dx = centerX - entity.x;
+            const dy = centerY - entity.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > 0) {
+                const sizeScale = (entity.radius + avgRadius) / (2 * avgRadius);
+                const force = dist * this.config.centerAttractionStrength * sizeScale;
+                entity.vx += (dx / dist) * force;
+                entity.vy += (dy / dist) * force;
+            }
+        }
+
+        // Step 5: Boundary constraints for composites containing children
+        // Find parent-child relationships and apply boundary constraints
+        for (const entity of entities) {
+            if (!entity.isComposite()) continue;
+            if (!this.visibleEntities.has(entity)) continue;
+            
+            // Apply boundary repulsion/constraint to its visible children
+            for (const child of entity.children) {
+                if (this.pinnedNodes.has(child)) continue;
+                if (!this.visibleEntities.has(child)) continue;
+                this.enforceCompositeBoundary(child, entity);
+            }
+        }
     }
+
+
 
     /**
      * Hard boundary constraint - teleport child back inside if it escapes.
      */
-    private enforceModuleBoundary(child: Node, module: any): void {
-        const result = module.shapeObject.enforceConstraint(
+    private enforceCompositeBoundary(child: Entity, composite: Entity): void {
+        const result = composite.shapeObject.enforceConstraint(
             child.x, child.y, child.vx, child.vy,
-            module.x, module.y,
-            this.BOUNDARY_MARGIN
+            composite.x, composite.y,
+            this.config.boundaryMargin
         );
         
         if (result) {
@@ -288,61 +441,61 @@ export class PhysicsEngine {
     }
 
     /**
-     * Apply repulsive force between two nodes.
+     * Update positions for all entities in all layers.
      */
+    private updatePositions(): void {
+        for (const layer of this.layers) {
+            for (const entity of layer) {
+                if (this.pinnedNodes.has(entity)) {
+                    entity.vx = 0;
+                    entity.vy = 0;
+                    continue;
+                }
 
-    /**
-     * Apply repulsive force from module boundary.
-     * Pushes child back inside if it tries to escape.
-     * Only applies force if child is near/outside boundary (efficient).
-     */
-    private applyModuleBoundaryRepulsion(child: Node, module: any): void {
-        const dx = child.x - module.x;
-        const dy = child.y - module.y;
-        const distFromCenter = Math.sqrt(dx * dx + dy * dy);
-        
-        // Only apply if child is near or outside the boundary
-        // Use radius * 1.0 as threshold to keep children well inside
-        const boundaryDistance = module.radius * 0.9;
-        
-        if (distFromCenter > boundaryDistance) {
-            // Child is escaping - push it back toward center
-            const force = (distFromCenter - module.radius * 0.7) * 0.25;
-            const fx = (-dx / (distFromCenter + 1e-6)) * force;
-            const fy = (-dy / (distFromCenter + 1e-6)) * force;
-            
-            child.vx += fx;
-            child.vy += fy;
+                entity.vx *= this.config.velocityDamping;
+                entity.vy *= this.config.velocityDamping;
+                
+                // Cap velocity
+                const speed = Math.sqrt(entity.vx * entity.vx + entity.vy * entity.vy);
+                if (speed > this.config.maxVelocityCap) {
+                    entity.vx = (entity.vx / speed) * this.config.maxVelocityCap;
+                    entity.vy = (entity.vy / speed) * this.config.maxVelocityCap;
+                }
+                
+                // Zero out very small velocities
+                if (Math.abs(entity.vx) < this.config.minVelocityThreshold) entity.vx = 0;
+                if (Math.abs(entity.vy) < this.config.minVelocityThreshold) entity.vy = 0;
+                
+                entity.x += entity.vx;
+                entity.y += entity.vy;
+            }
         }
     }
 
     /**
      * Apply repulsive force between two nodes.
      * Considers node size (radius) to prevent overlap.
-     * multiplier allows weakening repulsion for same-module nodes.
+     * All forces scale by node sizes for invariant behavior across different scales.
      */
-    private applyRepulsion(a: Node, b: Node, multiplier: number = 1.0): void {
+    private applyRepulsion(a: Entity, b: Entity, multiplier: number = 1.0): void {
         const dx = b.x - a.x;
         const dy = b.y - a.y;
-        const distSq = dx * dx + dy * dy + 1; // Avoid division by zero
+        const distSq = dx * dx + dy * dy + 1;
         const dist = Math.sqrt(distSq);
 
-        // Minimum distance based on node sizes (prevent overlap)
-        const minDist = (a.radius + b.radius) * 1.5;
+        // Minimum distance based on node sizes
+        const minDist = (a.radius + b.radius) * this.config.minNodeDistanceMultiplier;
+        
+        // Size scale factor: average of their radii relative to a reference
+        // This makes forces proportional to node mass/size
+        const avgRadius = (a.radius + b.radius) / 2;
+        const sizeScale = avgRadius / 15; // 15 is a reference radius; adjust as needed
 
-        // Modules repel MUCH more strongly (50x multiplier for module-module)
-        const isModuleA = this.modules.includes(a as any);
-        const isModuleB = this.modules.includes(b as any);
-        let modulePenalty = 1;
-        if (isModuleA && isModuleB) {
-            modulePenalty = 50; // Module-to-module: very strong
-        } else if (isModuleA || isModuleB) {
-            modulePenalty = 5; // Module-to-node: medium-strong
-        }
-
-        // Apply repulsion if nodes are closer than minDist
+        // Apply strong repulsion when nodes are too close (overlapping region)
         if (dist < minDist) {
-            const force = (this.strength * multiplier * modulePenalty * (minDist - dist)) / (dist + 1e-6);
+            const overlap = minDist - dist;
+            // Scale base repulsion by size
+            const force = (this.config.baseRepulsionStrength * multiplier * overlap * this.config.overlapRepulsionStrengthMultiplier * sizeScale) / (dist + 1e-6);
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 
@@ -350,9 +503,9 @@ export class PhysicsEngine {
             a.vy -= fy;
             b.vx += fx;
             b.vy += fy;
-        } else {
-            // Weaker repulsion at distance (inverse square)
-            const force = (this.strength * multiplier * modulePenalty) / distSq;
+        } else if (dist < minDist * this.config.moderateDistanceThresholdMultiplier) {
+            // Weaker repulsion at moderate distance, also scaled by size
+            const force = (this.config.baseRepulsionStrength * multiplier * this.config.moderateDistanceRepulsionStrengthMultiplier * sizeScale) / distSq;
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 
@@ -365,12 +518,41 @@ export class PhysicsEngine {
 
     /**
      * Apply attractive force along an edge.
+     * Target distance depends on node sizes: equilibrium = minDist + baseSpacing.
+     * Force magnitude scales with node sizes for scale-invariant behavior.
      */
-    private applyAttraction(a: Node, b: Node): void {
+    private applyAttraction(a: Entity, b: Entity, isBranching: boolean = false): void {
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const force = (dist - this.distance) * this.EDGE_ATTRACTION_STRENGTH;
+        
+        // Minimum distance - don't pull nodes closer than this
+        const minDist = (a.radius + b.radius) * this.config.minNodeDistanceMultiplier;
+        
+        // Only apply attraction if distance is greater than minimum
+        if (dist <= minDist) {
+            return;
+        }
+        
+        // Target link distance scales with node sizes: size-aware equilibrium
+        const targetDist = minDist + this.config.targetLinkDistance;
+        
+        // Size scale factor: average radius relative to reference
+        const avgRadius = (a.radius + b.radius) / 2;
+        const sizeScale = avgRadius / 15; // Reference radius
+        
+        // Cap the attraction distance to prevent excessive forces
+        const maxAttractionDistance = targetDist * 3;
+        const effectiveDist = Math.min(dist, maxAttractionDistance);
+        
+        // Choose attraction strength based on edge type
+        const attractionStrength = isBranching 
+            ? this.config.branchingEdgeAttractionStrength 
+            : this.config.edgeAttractionStrength;
+        
+        // Spring-like attraction: pull towards target distance
+        // Scale strength by node size to maintain consistent behavior across scales
+        const force = (effectiveDist - targetDist) * attractionStrength * sizeScale;
 
         const fx = (dx / (dist + 1e-6)) * force;
         const fy = (dy / (dist + 1e-6)) * force;
@@ -382,23 +564,27 @@ export class PhysicsEngine {
     }
 
     /**
-     * Set the repulsive charge force.
+     * Set the repulsive charge force strength.
      */
     setCharge(strength: number): void {
-        this.strength = strength;
+        // Note: This now affects BASE_REPULSION_STRENGTH
+        // Consider making BASE_REPULSION_STRENGTH non-readonly if dynamic adjustment is needed
+        console.warn('setCharge() called but BASE_REPULSION_STRENGTH is readonly. Consider refactoring if dynamic adjustment is required.');
     }
 
     /**
      * Set the target link distance.
      */
     setLinkDistance(distance: number): void {
-        this.distance = distance;
+        // Note: This now affects TARGET_LINK_DISTANCE
+        // Consider making TARGET_LINK_DISTANCE non-readonly if dynamic adjustment is needed
+        console.warn('setLinkDistance() called but TARGET_LINK_DISTANCE is readonly. Consider refactoring if dynamic adjustment is required.');
     }
 
     /**
      * Manually set a node's position and pin it (for dragging).
      */
-    pinNode(node: Node, x: number, y: number): void {
+    pinNode(node: Entity, x: number, y: number): void {
         node.x = x;
         node.y = y;
         node.vx = 0;
@@ -409,7 +595,7 @@ export class PhysicsEngine {
     /**
      * Unpin a node (allow it to move again).
      */
-    unpinNode(node: Node): void {
+    unpinNode(node: Entity): void {
         this.pinnedNodes.delete(node);
     }
 }

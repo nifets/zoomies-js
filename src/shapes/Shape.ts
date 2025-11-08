@@ -29,6 +29,19 @@ export abstract class Shape {
     ): boolean;
 
     /**
+     * Check if a point is within the interactive hitbox of the shape (for clicking).
+     * Can be larger than visual bounds for better UX. Defaults to isInside.
+     */
+    containsPoint(
+        pointX: number,
+        pointY: number,
+        centerX: number,
+        centerY: number
+    ): boolean {
+        return this.isInside(pointX, pointY, centerX, centerY);
+    }
+
+    /**
      * Enforce boundary constraint - teleport point back inside if outside.
      */
     enforceConstraint(

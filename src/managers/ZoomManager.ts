@@ -1,19 +1,20 @@
-import { Node } from '../core/Node';
+import { Entity } from '../core/Entity';
 
 /**
  * Manages zoom level and layer-based visibility.
- * Handles smooth transitions and dynamic module expansion.
+ * Handles smooth transitions and dynamic composite expansion.
  */
 export class ZoomManager {
     zoomLevel: number;
     minZoom: number;
     maxZoom: number;
-    layerMap: Map<Node, number>;
     animationDuration: number;
     isAnimating: boolean;
     onZoomChange: Function | null;
     targetZoom: number;
-    zoomVelocity: number;
+    startZoom: number;
+    prevZoom: number;
+    focusPoint: { x: number; y: number } | null;
 
     constructor(
         initialZoom: number = 0,
@@ -24,16 +25,18 @@ export class ZoomManager {
         this.targetZoom = initialZoom;
         this.minZoom = minZoom;
         this.maxZoom = maxZoom;
-        this.layerMap = new Map();
-        this.animationDuration = 150;
+        this.animationDuration = 2;
         this.isAnimating = false;
         this.onZoomChange = null;
-        this.zoomVelocity = 0;
+        this.startZoom = initialZoom;
+        this.prevZoom = initialZoom;
+        this.focusPoint = null;
     }
 
-    setZoom(level: number, animate: boolean = true): void {
+    setZoom(level: number, animate: boolean = true, focusPoint?: { x: number; y: number }): void {
         const clampedLevel = Math.max(this.minZoom, Math.min(this.maxZoom, level));
         this.targetZoom = clampedLevel;
+        this.focusPoint = focusPoint || null;
 
         if (!animate) {
             this.zoomLevel = clampedLevel;
@@ -42,6 +45,7 @@ export class ZoomManager {
                 this.onZoomChange(this.zoomLevel);
             }
         } else {
+            this.startZoom = this.zoomLevel;
             this.animateToTargetZoom();
         }
     }
@@ -60,9 +64,16 @@ export class ZoomManager {
             const elapsed = Date.now() - startTime;
             const progress = Math.min(elapsed / this.animationDuration, 1);
 
-            // Smooth easing
-            const eased = 1 - Math.pow(1 - progress, 3);
-            this.zoomLevel = this.zoomLevel + (this.targetZoom - this.zoomLevel) * eased;
+            // Gentle ease-in-out-quad: subtle acceleration and deceleration
+            let eased: number;
+            if (progress < 0.5) {
+                eased = 2 * progress * progress;
+            } else {
+                eased = -1 + (4 - 2 * progress) * progress;
+            }
+            
+            this.prevZoom = this.zoomLevel;
+            this.zoomLevel = this.startZoom + (this.targetZoom - this.startZoom) * eased;
 
             if (this.onZoomChange) {
                 this.onZoomChange(this.zoomLevel);
@@ -82,14 +93,14 @@ export class ZoomManager {
     /**
      * Get visibility (opacity) for a node at current zoom level.
      */
-    getNodeVisibility(node: Node): number {
+    getNodeVisibility(node: Entity): number {
         return node.getVisibility(this.zoomLevel);
     }
 
     /**
      * Get all nodes that should be visible at current zoom level.
      */
-    getVisibleNodes(nodes: Node[]): Node[] {
+    getVisibleNodes(nodes: Entity[]): Entity[] {
         return nodes.filter(node => {
             if (node.implicit) return false;
             return this.getNodeVisibility(node) > 0.05;
@@ -97,14 +108,31 @@ export class ZoomManager {
     }
 
     /**
-     * Determine if a module should expand/collapse based on zoom.
+     * Determine if a composite should expand/collapse based on zoom.
      */
-    shouldAutoExpand(module: any, threshold: number = 0.3): boolean {
-        const vis = this.getNodeVisibility(module);
+    shouldAutoExpand(composite: Entity, threshold: number = 0.3): boolean {
+        const vis = this.getNodeVisibility(composite);
         return vis > threshold;
     }
 
-    interpolateOpacity(node: Node, startAlpha: number, endAlpha: number, t: number): number {
+    /**
+     * Get composite collapse state (0 = fully expanded with children visible, 1 = fully collapsed).
+     * Used for zoom-based animations of children opacity and composite styling.
+     */
+    getCompositeCollapseState(collapseZoomStart: number = 0.3, collapseZoomEnd: number = 0.1): number {
+        // Clamp zoom level between start and end
+        if (this.zoomLevel > collapseZoomStart) {
+            return 0; // Fully expanded
+        }
+        if (this.zoomLevel < collapseZoomEnd) {
+            return 1; // Fully collapsed
+        }
+        // Interpolate between start and end
+        const range = collapseZoomStart - collapseZoomEnd;
+        return (collapseZoomStart - this.zoomLevel) / range;
+    }
+
+    interpolateOpacity(node: Entity, startAlpha: number, endAlpha: number, t: number): number {
         return startAlpha + (endAlpha - startAlpha) * t;
     }
 }

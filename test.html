@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoomies.js Test Networks</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+
+        #graph-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: white;
+        }
+
+        #controls {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 100;
+            font-size: 12px;
+        }
+
+        button {
+            display: block;
+            margin: 5px 0;
+            padding: 8px 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        button:hover {
+            background: #764ba2;
+        }
+
+        button.active {
+            background: #2ecc71;
+        }
+
+        .label {
+            margin-top: 10px;
+            font-size: 11px;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="graph-canvas"></canvas>
+    
+    <div id="controls">
+        <div style="margin-bottom: 10px; font-weight: bold;">Test Networks</div>
+        <button class="network-btn active" data-network="flat">1. Flat (5 nodes)</button>
+        <button class="network-btn" data-network="simple">2. Simple Hierarchy</button>
+        <button class="network-btn" data-network="complex">3. Complex Hierarchy</button>
+        
+        <button id="physics-btn" class="active" style="margin-top: 10px; background: #27ae60;">Physics: ON</button>
+        
+        <button id="zoom-debug-btn" style="margin-top: 5px; background: #8e44ad;">Zoom Debug: OFF</button>
+        
+        <div class="label">
+            <div style="margin-top: 10px; font-weight: bold;">Controls</div>
+            Scroll: zoom<br>
+            Drag: move nodes<br>
+            Right-click: pan
+        </div>
+    </div>
+
+    <script type="module">
+        import { Zoomies, Entity, Connection } from './src/index.ts';
+
+        let currentZoomies = null;
+        let currentNetwork = 'flat';
+
+        // ============================================================================
+        // TEST NETWORK 1: Flat (5 nodes, 4 edges) - no hierarchy
+        // ============================================================================
+        function createFlatNetwork() {
+            const nodeA = new Entity('Node_A', { 
+                layer: 0, 
+                colour: '#3498db', 
+                radius: 20,
+            });
+            
+            const nodeB = new Entity('Node_B', { 
+                layer: 0, 
+                colour: '#e74c3c', 
+                radius: 20,
+            });
+            
+            const nodeC = new Entity('Node_C', { 
+                layer: 0, 
+                colour: '#2ecc71', 
+                radius: 20,
+            });
+            
+            const nodeD = new Entity('Node_D', { 
+                layer: 0, 
+                colour: '#f39c12', 
+                radius: 20,
+            });
+            
+            const nodeE = new Entity('Node_E', { 
+                layer: 0, 
+                colour: '#9b59b6', 
+                shape: 'rectangle',
+                width: 60,
+                height: 40,
+            });
+
+            const connAB = new Connection('conn_AB', [nodeA], [nodeB], {
+                colour: '#95a5a6',
+                width: 2
+            });
+            
+            const connAC = new Connection('conn_AC', [nodeA], [nodeC], {
+                colour: '#95a5a6',
+                width: 2
+            });
+            
+            const connBD = new Connection('conn_BD', [nodeB], [nodeD], {
+                colour: '#95a5a6',
+                width: 2
+            });
+            
+            const connCE = new Connection('conn_CE', [nodeC], [nodeE], {
+                colour: '#95a5a6',
+                width: 2
+            });
+
+            return {
+                entities: [nodeA, nodeB, nodeC, nodeD, nodeE],
+                connections: [connAB, connAC, connBD, connCE]
+            };
+        }
+
+        // ============================================================================
+        // TEST NETWORK 2: Simple Hierarchy (3 composites with children, orphan nodes, cross edges)
+        // ============================================================================
+        function createSimpleHierarchy() {
+            // Composite 1 nodes
+            const node1A = new Entity('Node_1A', { 
+                layer: 0, 
+                colour: '#3498db', 
+                radius: 15,
+            });
+            
+            const node1B = new Entity('Node_1B', { 
+                layer: 0, 
+                colour: '#3498db', 
+                radius: 15,
+            });
+
+            const conn1AB = new Connection('conn_1AB', [node1A], [node1B], {
+                colour: '#95a5a6',
+                width: 2
+            });
+
+            const composite1 = new Entity('Composite_1', {
+                children: [node1A, node1B],
+                layer: 1,
+                colour: '#e8daef',
+                radius: 50
+            });
+
+            // Composite 2 nodes
+            const node2A = new Entity('Node_2A', { 
+                layer: 0, 
+                colour: '#2ecc71', 
+                radius: 15,
+            });
+            
+            const node2B = new Entity('Node_2B', { 
+                layer: 0, 
+                colour: '#2ecc71', 
+                radius: 15,
+            });
+
+            const conn2AB = new Connection('conn_2AB', [node2A], [node2B], {
+                colour: '#95a5a6',
+                width: 2
+            });
+
+            const composite2 = new Entity('Composite_2', {
+                children: [node2A, node2B],
+                layer: 1,
+                colour: '#d5f4e6',
+                radius: 50
+            });
+
+            // Composite 3 nodes
+            const node3A = new Entity('Node_3A', { 
+                layer: 0, 
+                colour: '#e74c3c', 
+                radius: 15,
+            });
+            
+            const node3B = new Entity('Node_3B', { 
+                layer: 0, 
+                colour: '#e74c3c', 
+                radius: 15,
+            });
+
+            const conn3AB = new Connection('conn_3AB', [node3A], [node3B], {
+                colour: '#95a5a6',
+                width: 2
+            });
+
+            const composite3 = new Entity('Composite_3', {
+                children: [node3A, node3B],
+                layer: 1,
+                colour: '#fadbd8',
+                radius: 50
+            });
+
+            // Orphan layer 0 nodes (not in any composite)
+            const orphanX = new Entity('Orphan_X', { 
+                layer: 0, 
+                colour: '#f39c12', 
+                radius: 15,
+            });
+            
+            const orphanY = new Entity('Orphan_Y', { 
+                layer: 0, 
+                colour: '#f39c12', 
+                radius: 15,
+            });
+
+            // Cross-composite connections
+            const conn1A2A = new Connection('conn_1A2A', [node1A], [node2A], {
+                colour: '#e67e22',
+                width: 1
+            });
+
+            const conn1B2B = new Connection('conn_1B2B', [node1B], [node2B], {
+                colour: '#e67e22',
+                width: 1
+            });
+
+            // Connection from composite 2 to composite 3
+            const conn2A3A = new Connection('conn_2A3A', [node2A], [node3A], {
+                colour: '#8e44ad',
+                width: 1
+            });
+
+            // Connections from node1A to orphan nodes
+            const conn1AX = new Connection('conn_1AX', [node1A], [orphanX], {
+                colour: '#16a085',
+                width: 1
+            });
+
+            const conn1AY = new Connection('conn_1AY', [node1A], [orphanY], {
+                colour: '#16a085',
+                width: 1
+            });
+
+            // Connection between orphan nodes
+            const connXY = new Connection('connXY', [orphanX], [orphanY], {
+                colour: '#95a5a6',
+                width: 2
+            });
+
+            return {
+                entities: [composite1, composite2, composite3, node1A, node1B, node2A, node2B, node3A, node3B, orphanX, orphanY],
+                connections: [conn1AB, conn2AB, conn3AB, conn1A2A, conn1B2B, conn2A3A, conn1AX, conn1AY, connXY]
+            };
+        }
+
+        // ============================================================================
+        // TEST NETWORK 3: Complex Hierarchy (3-level hierarchy)
+        // ============================================================================
+        function createComplexHierarchy() {
+            // Level 0: nodes
+            const nodes = {
+                n1: new Entity('N1', { layer: 0, colour: '#3498db', radius: 12 }),
+                n2: new Entity('N2', { layer: 0, colour: '#3498db', radius: 12 }),
+                n3: new Entity('N3', { layer: 0, colour: '#2ecc71', radius: 12 }),
+                n4: new Entity('N4', { layer: 0, colour: '#2ecc71', radius: 12 }),
+                n5: new Entity('N5', { layer: 0, colour: '#f39c12', radius: 12 }),
+                n6: new Entity('N6', { layer: 0, colour: '#f39c12', radius: 12 }),
+            };
+
+            // Level 0: connections
+            const edgesL0 = [
+                new Connection('e_n1n2', [nodes.n1], [nodes.n2], { colour: '#95a5a6', width: 1 }),
+                new Connection('e_n3n4', [nodes.n3], [nodes.n4], { colour: '#95a5a6', width: 1 }),
+                new Connection('e_n5n6', [nodes.n5], [nodes.n6], { colour: '#95a5a6', width: 1 }),
+            ];
+
+            // Level 1: composites of level 0
+            const composite1 = new Entity('Comp1', {
+                children: [nodes.n1, nodes.n2],
+                layer: 1,
+                colour: '#ecf0f1',
+                radius: 45
+            });
+
+            const composite2 = new Entity('Comp2', {
+                children: [nodes.n3, nodes.n4],
+                layer: 1,
+                colour: '#ecf0f1',
+                radius: 45
+            });
+
+            const composite3 = new Entity('Comp3', {
+                children: [nodes.n5, nodes.n6],
+                layer: 1,
+                colour: '#ecf0f1',
+                radius: 45
+            });
+
+            // Level 1: connections between composites
+            const edgesL1 = [
+                new Connection('e_c1c2', [composite1], [composite2], { colour: '#e67e22', width: 2 }),
+                new Connection('e_c2c3', [composite2], [composite3], { colour: '#e67e22', width: 2 }),
+            ];
+
+            // Level 2: super-composite
+            const superComposite = new Entity('SuperComp', {
+                children: [composite1, composite2, composite3],
+                layer: 2,
+                colour: '#d7bde2',
+                radius: 150
+            });
+
+            return {
+                entities: [
+                    superComposite, composite1, composite2, composite3,
+                    nodes.n1, nodes.n2, nodes.n3, nodes.n4, nodes.n5, nodes.n6
+                ],
+                connections: [...edgesL0, ...edgesL1]
+            };
+        }
+
+        // ============================================================================
+        // Initialize network
+        // ============================================================================
+        function initializeNetwork(networkName) {
+            if (currentZoomies) {
+                currentZoomies.destroy();
+            }
+
+            let network;
+            if (networkName === 'flat') {
+                network = createFlatNetwork();
+            } else if (networkName === 'simple') {
+                network = createSimpleHierarchy();
+            } else {
+                network = createComplexHierarchy();
+            }
+
+            currentNetwork = networkName;
+            
+            // Create Zoomies with flat lists
+            currentZoomies = new Zoomies('#graph-canvas', network.entities, network.connections, {
+                enablePhysics: true
+            });
+
+            // Update button states
+            document.querySelectorAll('.network-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.network === networkName);
+            });
+
+            console.log(`[Demo] Loaded network: ${networkName}`);
+            console.log(`[Demo] Entities: ${network.entities.length}, Connections: ${network.connections.length}`);
+        }
+
+        // ============================================================================
+        // Event handlers
+        // ============================================================================
+        document.querySelectorAll('.network-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                initializeNetwork(btn.dataset.network);
+            });
+        });
+
+        let physicsEnabled = true;
+        document.getElementById('physics-btn').addEventListener('click', () => {
+            const btn = document.getElementById('physics-btn');
+            if (physicsEnabled) {
+                currentZoomies.disablePhysics();
+                physicsEnabled = false;
+                btn.textContent = 'Physics: OFF';
+                btn.classList.remove('active');
+                btn.style.background = '#e74c3c';
+            } else {
+                currentZoomies.enablePhysics();
+                physicsEnabled = true;
+                btn.textContent = 'Physics: ON';
+                btn.classList.add('active');
+                btn.style.background = '#27ae60';
+            }
+        });
+
+        let zoomDebugEnabled = false;
+        document.getElementById('zoom-debug-btn').addEventListener('click', () => {
+            const btn = document.getElementById('zoom-debug-btn');
+            if (zoomDebugEnabled) {
+                currentZoomies.toggleZoomDebug();
+                zoomDebugEnabled = false;
+                btn.textContent = 'Zoom Debug: OFF';
+                btn.classList.remove('active');
+                btn.style.background = '#8e44ad';
+            } else {
+                currentZoomies.toggleZoomDebug();
+                zoomDebugEnabled = true;
+                btn.textContent = 'Zoom Debug: ON';
+                btn.classList.add('active');
+                btn.style.background = '#16a085';
+            }
+        });
+
+        // Initialize with flat network
+        initializeNetwork('flat');
+    </script>
+</body>
+</html>

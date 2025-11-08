@@ -1,40 +1,44 @@
-import { Node } from '../core/Node';
-import { Edge } from '../core/Edge';
-import { HyperEdge } from '../core/HyperEdge';
-import { Module } from '../core/Module';
+import { Entity } from '../core/Entity';
+import { Connection } from '../core/Connection';
 import { Application, Graphics, Container, Text } from 'pixi.js';
+import { ZoomManager } from '../managers/ZoomManager';
+import type { DetailState, LayerDetailManager } from '../managers/LayerDetailManager';
 
 export class Renderer {
     canvas: HTMLCanvasElement;
     app: Application;
-    nodeGraphics: Map<Node, Graphics>;
-    edgeGraphics: Map<Edge, Graphics>;
-    hyperEdgeGraphics: Map<HyperEdge, Graphics>;
-    nodeLabels: Map<Node, Text>;
-    moduleLabels: Map<Module, Text>;
+    nodeGraphics: Map<Entity, Graphics>;
+    connectionGraphics: Map<Connection, Graphics>;
+    nodeLabels: Map<Entity, Text>;
     worldContainer: Container;
-    edgeContainer: Container;
+    connectionContainer: Container;
     nodeContainer: Container;
     labelContainer: Container;
     scale: number;
     offsetX: number;
     offsetY: number;
+    zoomManager: ZoomManager | null;
+    layerDetailManager: LayerDetailManager | null;
 
-    constructor(canvas: HTMLCanvasElement) {
+    // Zoom-based visibility thresholds
+    readonly COMPOSITE_COLLAPSE_ZOOM = 0.3; // Zoom level where children start to hide
+    readonly COMPOSITE_FULLY_COLLAPSED_ZOOM = 0.1; // Zoom level where children are completely hidden
+
+    constructor(canvas: HTMLCanvasElement, zoomManager: ZoomManager | null = null, layerDetailManager: LayerDetailManager | null = null) {
         this.canvas = canvas;
+        this.zoomManager = zoomManager;
+        this.layerDetailManager = layerDetailManager;
         const rect = canvas.getBoundingClientRect();
         this.app = new Application();
         this.nodeGraphics = new Map();
-        this.edgeGraphics = new Map();
-        this.hyperEdgeGraphics = new Map();
+        this.connectionGraphics = new Map();
         this.nodeLabels = new Map();
-        this.moduleLabels = new Map();
         this.worldContainer = new Container();
-        this.edgeContainer = new Container();
+        this.connectionContainer = new Container();
         this.nodeContainer = new Container();
         this.labelContainer = new Container();
-        this.worldContainer.addChild(this.edgeContainer);
         this.worldContainer.addChild(this.nodeContainer);
+        this.worldContainer.addChild(this.connectionContainer);
         this.worldContainer.addChild(this.labelContainer);
         this.scale = 1;
         this.offsetX = rect.width / 2;
@@ -43,6 +47,7 @@ export class Renderer {
     
     async init(): Promise<void> {
         const rect = this.canvas.getBoundingClientRect();
+        console.log('[Renderer] Initializing with dimensions:', rect.width, 'x', rect.height);
         await this.app.init({
             canvas: this.canvas,
             width: rect.width,
@@ -52,10 +57,12 @@ export class Renderer {
             resolution: window.devicePixelRatio || 1,
             backgroundColor: 0xffffff
         });
+        console.log('[Renderer] PixiJS app initialized');
         this.app.stage.addChild(this.worldContainer);
         this.offsetX = rect.width / 2;
         this.offsetY = rect.height / 2;
         this.updateWorldTransform();
+        console.log('[Renderer] World transform set, offset:', this.offsetX, this.offsetY);
         
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -72,17 +79,30 @@ export class Renderer {
         this.worldContainer.scale.set(this.scale, this.scale);
     }
 
-    drawNode(node: Node): void {
+    /**
+     * Calculate child node opacity based on parent composite collapse state.
+     * Children fade out as composite collapses.
+     */
+    private getChildNodeOpacity(node: Entity): number {
+        if (!node.parent || node.parent.implicit) return 1.0;
+        
+        const collapseState = this.zoomManager?.getCompositeCollapseState(this.COMPOSITE_COLLAPSE_ZOOM, this.COMPOSITE_FULLY_COLLAPSED_ZOOM) ?? 0;
+        // Children fade from 1.0 (expanded) to 0.0 (collapsed)
+        return Math.max(0, 1.0 - collapseState);
+    }
+
+    drawNode(node: Entity, detailState?: DetailState): void {
         if (node.implicit) return;
         let graphics = this.nodeGraphics.get(node);
         if (!graphics) {
             graphics = new Graphics();
             this.nodeContainer.addChild(graphics);
             this.nodeGraphics.set(node, graphics);
+            console.log('[Renderer] Created graphics for node:', node.id, 'at', node.x, node.y);
         }
         graphics.clear();
-        graphics.alpha = node.alpha;
-        const colour = parseInt((node.attributes.colour ?? '#3498db').replace('#', ''), 16);
+        graphics.alpha = node.alpha * this.getChildNodeOpacity(node);
+        const colour = parseInt((node.colour ?? '#3498db').replace('#', ''), 16);
         
         if (node.shape === 'rectangle') {
             const w = node.width ?? node.radius * 2;
@@ -110,283 +130,224 @@ export class Renderer {
             }
         }
 
-        if (this.scale > 0.8) {
-            let label = this.nodeLabels.get(node);
-            const targetRes = Math.max(4, this.scale * 4);
-            
-            if (!label) {
-                label = new Text({
-                    text: node.id,
-                    style: {
-                        fontSize: 12,
-                        fill: 0x000000,
-                        align: 'center',
-                        fontFamily: 'Arial, sans-serif'
-                    },
-                    resolution: targetRes
-                });
-                label.anchor.set(0.5, 0.5);
-                this.labelContainer.addChild(label);
-                this.nodeLabels.set(node, label);
-            } else if (Math.abs(label.resolution - targetRes) > 2) {
-                // Recreate label with new resolution when zoom changes significantly
-                this.labelContainer.removeChild(label);
-                label.destroy();
-                label = new Text({
-                    text: node.id,
-                    style: {
-                        fontSize: 12,
-                        fill: 0x000000,
-                        align: 'center',
-                        fontFamily: 'Arial, sans-serif'
-                    },
-                    resolution: targetRes
-                });
-                label.anchor.set(0.5, 0.5);
-                this.labelContainer.addChild(label);
-                this.nodeLabels.set(node, label);
-            }
-            label.position.set(node.x, node.y);
-            label.visible = true;
-            label.alpha = node.alpha;
-        } else {
-            const label = this.nodeLabels.get(node);
-            if (label) label.visible = false;
+        // Label handling for both regular nodes and composites
+        let label = this.nodeLabels.get(node);
+        const targetRes = Math.max(4, this.scale * 4);
+        
+        // Scale label font size by layer (same as node size scaling)
+        const layerScaleFactor = node.attributes.layerScaleFactor ?? 5;
+        const layerScale = Math.pow(layerScaleFactor, node.layer);
+        const fontSize = 12 * layerScale;
+        
+        if (!label) {
+            label = new Text({
+                text: node.id,
+                style: {
+                    fontSize: fontSize,
+                    fill: 0x000000,
+                    align: 'center',
+                    fontFamily: 'Arial, sans-serif'
+                },
+                resolution: targetRes
+            });
+            label.anchor.set(0.5, 0.5);
+            this.labelContainer.addChild(label);
+            this.nodeLabels.set(node, label);
+        } else if (Math.abs(label.resolution - targetRes) > 2) {
+            this.labelContainer.removeChild(label);
+            label.destroy();
+            label = new Text({
+                text: node.id,
+                style: {
+                    fontSize: fontSize,
+                    fill: 0x000000,
+                    align: 'center',
+                    fontFamily: 'Arial, sans-serif'
+                },
+                resolution: targetRes
+            });
+            label.anchor.set(0.5, 0.5);
+            this.labelContainer.addChild(label);
+            this.nodeLabels.set(node, label);
         }
+        
+        const labelOffset = 20;
+        if (detailState && detailState.labelInside) {
+            label.position.set(node.x, node.y);
+        } else {
+            label.position.set(node.x, node.y - node.radius - labelOffset);
+        }
+        
+        label.visible = true;
+        label.alpha = (detailState?.opacity ?? 1.0) * node.alpha;
     }
 
-    private getEdgeConnectionPoint(fromNode: Node, toNode: Node): { x: number; y: number } {
+    private getEdgeConnectionPoint(fromNode: Entity, toNode: Entity): { x: number; y: number } {
         return fromNode.shapeObject.getBorderPoint(fromNode.x, fromNode.y, toNode.x, toNode.y);
     }
 
-    drawEdge(edge: Edge, modules?: any[]): void {
-        if (edge.hidden || edge.source.implicit || edge.target.implicit) return;
+    drawConnection(connection: Connection, detailState?: DetailState): void {
+        if (connection.hidden || connection.sources.length === 0 || connection.targets.length === 0) return;
         
-        // Find modules for source and target if not already set
-        if (!edge.sourceModule && modules) {
-            for (const module of modules) {
-                if (module.children.includes(edge.source)) {
-                    edge.sourceModule = module;
-                    break;
-                }
-            }
-        }
-        if (!edge.targetModule && modules) {
-            for (const module of modules) {
-                if (module.children.includes(edge.target)) {
-                    edge.targetModule = module;
-                    break;
-                }
-            }
-        }
-        
-        let graphics = this.edgeGraphics.get(edge);
+        let graphics = this.connectionGraphics.get(connection);
         if (!graphics) {
             graphics = new Graphics();
-            this.edgeContainer.addChild(graphics);
-            this.edgeGraphics.set(edge, graphics);
+            this.connectionContainer.addChild(graphics);
+            this.connectionGraphics.set(connection, graphics);
         }
         graphics.clear();
-        graphics.alpha = edge.alpha;
-        const colour = parseInt((edge.attributes.colour ?? '#95a5a6').replace('#', ''), 16);
-        const width = edge.attributes.width ?? 2;
+        
+        // Apply detail state opacity if provided
+        const opacity = detailState ? detailState.opacity : 1;
+        graphics.alpha = connection.alpha * opacity;
+        
+        const colour = parseInt((connection.attributes.colour ?? '#95a5a6').replace('#', ''), 16);
+        
+        // Scale edge width by layer (use max layer of endpoints for scaling)
+        let maxLayer = 0;
+        for (const source of connection.sources) {
+            maxLayer = Math.max(maxLayer, source.layer);
+        }
+        for (const target of connection.targets) {
+            maxLayer = Math.max(maxLayer, target.layer);
+        }
+        const layerScaleFactor = connection.sources[0]?.attributes.layerScaleFactor ?? 5;
+        const layerScale = Math.pow(layerScaleFactor, maxLayer);
+        const width = (connection.attributes.width ?? 2) * layerScale;
 
-        // Check if this is a cross-module edge requiring branching
-        if (edge.sourceModule && edge.targetModule && edge.sourceModule !== edge.targetModule) {
-            // Hierarchical edge with branching
-            const sourceNode = edge.source;
-            const targetNode = edge.target;
+        // Check if this is a synthetic edge between composites
+        if (connection.attributes.synthetic && connection.subEdges.length > 0) {
+            // For synthetic edges, draw from composite border to each child node involved
+            const source = connection.sources[0];
+            const target = connection.targets[0];
             
-            // Calculate the inter-module border points first (these are the connection points)
-            const sourceModuleExit = this.getEdgeConnectionPoint(edge.sourceModule, edge.targetModule);
-            const targetModuleEntry = this.getEdgeConnectionPoint(edge.targetModule, edge.sourceModule);
+            // Get unique source and target nodes from subEdges
+            const sourceNodes = new Set<any>();
+            const targetNodes = new Set<any>();
+            for (const subEdge of connection.subEdges) {
+                sourceNodes.add(subEdge.source);
+                targetNodes.add(subEdge.target);
+            }
             
-            // 1. sourceNode → sourceModule border (at the exit point)
-            const sourceNodeEdge = this.getEdgeConnectionPoint(sourceNode, edge.targetModule);
-            graphics.moveTo(sourceNodeEdge.x, sourceNodeEdge.y);
-            graphics.lineTo(sourceModuleExit.x, sourceModuleExit.y);
-            graphics.stroke({ color: colour, width, alpha: 0.6 });
-            
-            // 2. sourceModule border → targetModule border
-            graphics.moveTo(sourceModuleExit.x, sourceModuleExit.y);
-            graphics.lineTo(targetModuleEntry.x, targetModuleEntry.y);
+            // Draw main edge between composites
+            const sourceCompositeExit = this.getEdgeConnectionPoint(source, target);
+            const targetCompositeEntry = this.getEdgeConnectionPoint(target, source);
+            graphics.moveTo(sourceCompositeExit.x, sourceCompositeExit.y);
+            graphics.lineTo(targetCompositeEntry.x, targetCompositeEntry.y);
             graphics.stroke({ color: colour, width: width * 1.5 });
             
-            // 3. targetModule border → targetNode (from the entry point)
-            const targetNodeEdge = this.getEdgeConnectionPoint(targetNode, edge.sourceModule);
-            graphics.moveTo(targetModuleEntry.x, targetModuleEntry.y);
-            graphics.lineTo(targetNodeEdge.x, targetNodeEdge.y);
-            graphics.stroke({ color: colour, width, alpha: 0.6 });
-        } else {
-            // Regular edge
-            const start = this.getEdgeConnectionPoint(edge.source, edge.target);
-            const end = this.getEdgeConnectionPoint(edge.target, edge.source);
-            graphics.moveTo(start.x, start.y);
-            graphics.lineTo(end.x, end.y);
-            graphics.stroke({ color: colour, width });
-        }
-    }
-
-    drawHyperEdge(hyperEdge: HyperEdge): void {
-        if (hyperEdge.hidden || hyperEdge.sources.length === 0 || hyperEdge.targets.length === 0) return;
-        let graphics = this.hyperEdgeGraphics.get(hyperEdge);
-        if (!graphics) {
-            graphics = new Graphics();
-            this.edgeContainer.addChild(graphics);
-            this.hyperEdgeGraphics.set(hyperEdge, graphics);
-        }
-        graphics.clear();
-        graphics.alpha = hyperEdge.alpha * 0.6;
-        const sourceCentroidX = hyperEdge.sources.reduce((sum, n) => sum + n.x, 0) / hyperEdge.sources.length;
-        const sourceCentroidY = hyperEdge.sources.reduce((sum, n) => sum + n.y, 0) / hyperEdge.sources.length;
-        const targetCentroidX = hyperEdge.targets.reduce((sum, n) => sum + n.x, 0) / hyperEdge.targets.length;
-        const targetCentroidY = hyperEdge.targets.reduce((sum, n) => sum + n.y, 0) / hyperEdge.targets.length;
-        const colour = parseInt((hyperEdge.attributes.colour ?? '#9b59b6').replace('#', ''), 16);
-        const width = hyperEdge.attributes.width ?? 1.5;
-        for (const source of hyperEdge.sources) {
-            graphics.moveTo(source.x, source.y);
-            graphics.lineTo(targetCentroidX, targetCentroidY);
-            graphics.stroke({ color: colour, width });
-        }
-        for (const target of hyperEdge.targets) {
-            graphics.moveTo(sourceCentroidX, sourceCentroidY);
-            graphics.lineTo(target.x, target.y);
-            graphics.stroke({ color: colour, width });
-        }
-    }
-
-    drawModule(module: Module): void {
-        if (module.implicit) return;
-        let graphics = this.nodeGraphics.get(module);
-        if (!graphics) {
-            graphics = new Graphics();
-            this.nodeContainer.addChild(graphics);
-            this.nodeGraphics.set(module, graphics);
-        }
-        graphics.clear();
-        const colour = parseInt((module.attributes.colour ?? '#e8daef').replace('#', ''), 16);
-        
-        if (module.shape === 'rectangle') {
-            const w = module.width ?? module.radius * 2;
-            const h = module.height ?? module.radius * 2;
-            const cornerRadius = module.attributes.cornerRadius ?? 0;
-            graphics.alpha = 0.15;
-            graphics.roundRect(module.x - w / 2, module.y - h / 2, w, h, cornerRadius);
-            graphics.fill({ color: colour });
-            graphics.alpha = 0.6;
-            graphics.roundRect(module.x - w / 2, module.y - h / 2, w, h, cornerRadius);
-            graphics.stroke({ color: 0x7d3c98, width: 2 });
-            
-            let label = this.moduleLabels.get(module);
-            const targetRes = Math.max(4, this.scale * 4);
-            
-            if (!label) {
-                label = new Text({
-                    text: module.id,
-                    style: {
-                        fontSize: 14,
-                        fill: 0x7d3c98,
-                        fontWeight: 'bold',
-                        align: 'center',
-                        fontFamily: 'Arial, sans-serif'
-                    },
-                    resolution: targetRes
-                });
-                label.anchor.set(0.5, 1);
-                this.labelContainer.addChild(label);
-                this.moduleLabels.set(module, label);
-            } else if (Math.abs(label.resolution - targetRes) > 2) {
-                this.labelContainer.removeChild(label);
-                label.destroy();
-                label = new Text({
-                    text: module.id,
-                    style: {
-                        fontSize: 14,
-                        fill: 0x7d3c98,
-                        fontWeight: 'bold',
-                        align: 'center',
-                        fontFamily: 'Arial, sans-serif'
-                    },
-                    resolution: targetRes
-                });
-                label.anchor.set(0.5, 1);
-                this.labelContainer.addChild(label);
-                this.moduleLabels.set(module, label);
+            // Draw branching edges from source composite to each source child node
+            for (const childNode of sourceNodes) {
+                const childEdgePoint = this.getEdgeConnectionPoint(childNode, target);
+                // Scale by geometric mean between parent and child layer scales
+                const childLayerScale = Math.pow(layerScaleFactor, childNode.layer);
+                const meanScale = Math.sqrt(layerScale * childLayerScale);
+                const branchWidth = (connection.attributes.width ?? 2) * meanScale;
+                
+                // Use child node's opacity for branching edges
+                const currentZoom = this.zoomManager?.zoomLevel ?? 0;
+                const childDetailState = this.layerDetailManager?.getDetailStateAtZoom(childNode, currentZoom) || { opacity: 1 };
+                const branchAlpha = childDetailState.opacity * 0.6;
+                
+                graphics.moveTo(sourceCompositeExit.x, sourceCompositeExit.y);
+                graphics.lineTo(childEdgePoint.x, childEdgePoint.y);
+                graphics.stroke({ color: colour, width: branchWidth, alpha: branchAlpha });
             }
-            label.position.set(module.x, module.y - h / 2 - 5);
-            label.visible = true;
-            label.alpha = 0.8;
-        } else {
-            const radius = module.radius;
-            graphics.alpha = 0.15;
-            graphics.circle(module.x, module.y, radius);
-            graphics.fill({ color: colour });
-            graphics.alpha = 0.6;
-            graphics.circle(module.x, module.y, radius);
-            graphics.stroke({ color: 0x7d3c98, width: 2 });
             
-            let label = this.moduleLabels.get(module);
-            const targetRes = Math.max(4, this.scale * 4);
-            
-            if (!label) {
-                label = new Text({
-                    text: module.id,
-                    style: {
-                        fontSize: 14,
-                        fill: 0x7d3c98,
-                        fontWeight: 'bold',
-                        align: 'center',
-                        fontFamily: 'Arial, sans-serif'
-                    },
-                    resolution: targetRes
-                });
-                label.anchor.set(0.5, 1);
-                this.labelContainer.addChild(label);
-                this.moduleLabels.set(module, label);
-            } else if (Math.abs(label.resolution - targetRes) > 2) {
-                this.labelContainer.removeChild(label);
-                label.destroy();
-                label = new Text({
-                    text: module.id,
-                    style: {
-                        fontSize: 14,
-                        fill: 0x7d3c98,
-                        fontWeight: 'bold',
-                        align: 'center',
-                        fontFamily: 'Arial, sans-serif'
-                    },
-                    resolution: targetRes
-                });
-                label.anchor.set(0.5, 1);
-                this.labelContainer.addChild(label);
-                this.moduleLabels.set(module, label);
+            // Draw branching edges from target composite to each target child node
+            for (const childNode of targetNodes) {
+                const childEdgePoint = this.getEdgeConnectionPoint(childNode, source);
+                // Scale by geometric mean between parent and child layer scales
+                const childLayerScale = Math.pow(layerScaleFactor, childNode.layer);
+                const meanScale = Math.sqrt(layerScale * childLayerScale);
+                const branchWidth = (connection.attributes.width ?? 2) * meanScale;
+                
+                // Use child node's opacity for branching edges
+                const currentZoom = this.zoomManager?.zoomLevel ?? 0;
+                const childDetailState = this.layerDetailManager?.getDetailStateAtZoom(childNode, currentZoom) || { opacity: 1 };
+                const branchAlpha = childDetailState.opacity * 0.6;
+                
+                graphics.moveTo(targetCompositeEntry.x, targetCompositeEntry.y);
+                graphics.lineTo(childEdgePoint.x, childEdgePoint.y);
+                graphics.stroke({ color: colour, width: branchWidth, alpha: branchAlpha });
             }
-            label.position.set(module.x, module.y - radius - 5);
-            label.visible = true;
-            label.alpha = 0.8;
+        } else {
+            // Handle many-to-many connections: draw from each source to each target
+            for (const source of connection.sources) {
+                if (source.implicit) continue;
+                for (const target of connection.targets) {
+                    if (target.implicit) continue;
+                    
+                    // Check if source and target are in different composites (cross-layer connection)
+                    const sourceParent = source.parent;
+                    const targetParent = target.parent;
+                    
+                    if (sourceParent && targetParent && sourceParent !== targetParent && !sourceParent.implicit && !targetParent.implicit) {
+                        // Cross-composite hierarchical edge with branching
+                        const sourceNodeEdgePoint = this.getEdgeConnectionPoint(source, targetParent);
+                        const sourceCompositeExit = this.getEdgeConnectionPoint(sourceParent, targetParent);
+                        const targetCompositeEntry = this.getEdgeConnectionPoint(targetParent, sourceParent);
+                        const targetNodeEdgePoint = this.getEdgeConnectionPoint(target, sourceParent);
+                        
+                        // Scale branching widths by geometric mean between parent and child layer scales
+                        const sourceChildLayerScale = Math.pow(layerScaleFactor, source.layer);
+                        const sourceParentLayerScale = Math.pow(layerScaleFactor, sourceParent.layer);
+                        const targetChildLayerScale = Math.pow(layerScaleFactor, target.layer);
+                        const targetParentLayerScale = Math.pow(layerScaleFactor, targetParent.layer);
+                        const sourceBranchWidth = (connection.attributes.width ?? 2) * Math.sqrt(sourceParentLayerScale * sourceChildLayerScale);
+                        const targetBranchWidth = (connection.attributes.width ?? 2) * Math.sqrt(targetParentLayerScale * targetChildLayerScale);
+                        
+                        // Get current zoom for detail state
+                        const currentZoom = this.zoomManager?.zoomLevel ?? 0;
+                        const sourceDetailState = this.layerDetailManager?.getDetailStateAtZoom(source, currentZoom) || { opacity: 1 };
+                        const targetDetailState = this.layerDetailManager?.getDetailStateAtZoom(target, currentZoom) || { opacity: 1 };
+                        
+                        // Segment 1: source node → source composite border (use source opacity)
+                        graphics.moveTo(sourceNodeEdgePoint.x, sourceNodeEdgePoint.y);
+                        graphics.lineTo(sourceCompositeExit.x, sourceCompositeExit.y);
+                        graphics.stroke({ color: colour, width: sourceBranchWidth, alpha: sourceDetailState.opacity * 0.6 });
+                        
+                        // Segment 2: source composite border → target composite border (main edge)
+                        graphics.moveTo(sourceCompositeExit.x, sourceCompositeExit.y);
+                        graphics.lineTo(targetCompositeEntry.x, targetCompositeEntry.y);
+                        graphics.stroke({ color: colour, width: width * 1.5 });
+                        
+                        // Segment 3: target composite border → target node (use target opacity)
+                        graphics.moveTo(targetCompositeEntry.x, targetCompositeEntry.y);
+                        graphics.lineTo(targetNodeEdgePoint.x, targetNodeEdgePoint.y);
+                        graphics.stroke({ color: colour, width: targetBranchWidth, alpha: targetDetailState.opacity * 0.6 });
+                    } else {
+                        // Regular edge (same composite or no parents)
+                        const start = this.getEdgeConnectionPoint(source, target);
+                        const end = this.getEdgeConnectionPoint(target, source);
+                        graphics.moveTo(start.x, start.y);
+                        graphics.lineTo(end.x, end.y);
+                        graphics.stroke({ color: colour, width });
+                    }
+                }
+            }
         }
     }
 
-    updatePositions(nodes: Node[]): void {
+    updatePositions(nodes: Entity[]): void {
         for (const node of nodes) {
             this.drawNode(node);
         }
     }
 
-    updateEdges(edges: Edge[]): void {
-        for (const edge of edges) {
-            this.drawEdge(edge);
-        }
-    }
-
-    updateHyperEdges(hyperEdges: HyperEdge[]): void {
-        for (const hyperEdge of hyperEdges) {
-            this.drawHyperEdge(hyperEdge);
+    updateConnections(connections: Connection[]): void {
+        for (const connection of connections) {
+            this.drawConnection(connection);
         }
     }
 
     clear(): void {
-        // Pixi.js auto-clears
+        // Don't remove graphics, just clear them - they'll be redrawn
+    }
+
+    render(): void {
+        // PixiJS v8 auto-renders, no need to call render manually
+        // The app.ticker handles rendering automatically
     }
 
     setCamera(scale: number, offsetX: number, offsetY: number): void {

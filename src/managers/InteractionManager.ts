@@ -1,30 +1,24 @@
-import { Node } from '../core/Node';
-import { Edge } from '../core/Edge';
-import { HyperEdge } from '../core/HyperEdge';
-import { Module } from '../core/Module';
+import { Entity } from '../core/Entity';
+import { Connection } from '../core/Connection';
 
 /**
  * Manages user interactions with the graph.
  * Handles selection, hover, and drag events.
  */
 export class InteractionManager {
-    selectedNodes: Node[];
-    selectedModules: Module[];
-    hoveredNode: Node | null;
-    hoveredEdge: Edge | null;
-    hoveredHyperEdge: HyperEdge | null;
+    selectedNodes: Entity[];
+    hoveredNode: Entity | null;
+    hoveredConnection: Connection | null;
     eventCallbacks: Map<string, Function[]>;
 
     constructor() {
         this.selectedNodes = [];
-        this.selectedModules = [];
         this.hoveredNode = null;
-        this.hoveredEdge = null;
-        this.hoveredHyperEdge = null;
+        this.hoveredConnection = null;
         this.eventCallbacks = new Map();
     }
 
-    selectNode(node: Node, multi: boolean = false): void {
+    selectNode(node: Entity, multi: boolean = false): void {
         if (!multi) {
             this.selectedNodes.forEach(n => n.deselect());
             this.selectedNodes = [];
@@ -36,38 +30,18 @@ export class InteractionManager {
         }
     }
 
-    deselectNode(node: Node): void {
+    deselectNode(node: Entity): void {
         node.deselect();
         this.selectedNodes = this.selectedNodes.filter(n => n !== node);
         this.emit('nodeDeselected', node);
     }
 
-    selectModule(module: Module, multi: boolean = false): void {
-        if (!multi) {
-            this.selectedModules.forEach(m => m.deselect());
-            this.selectedModules = [];
-        }
-        if (!this.selectedModules.includes(module)) {
-            module.select();
-            this.selectedModules.push(module);
-            this.emit('moduleSelected', module);
-        }
-    }
-
-    deselectModule(module: Module): void {
-        module.deselect();
-        this.selectedModules = this.selectedModules.filter(m => m !== module);
-        this.emit('moduleDeselected', module);
-    }
-
     clearSelection(): void {
         this.selectedNodes.forEach(n => n.deselect());
-        this.selectedModules.forEach(m => m.deselect());
         this.selectedNodes = [];
-        this.selectedModules = [];
     }
 
-    hoverNode(node: Node | null): void {
+    hoverNode(node: Entity | null): void {
         if (this.hoveredNode) {
             this.hoveredNode.unhighlight();
         }
@@ -78,25 +52,14 @@ export class InteractionManager {
         }
     }
 
-    hoverEdge(edge: Edge | null): void {
-        if (this.hoveredEdge) {
-            this.hoveredEdge.unhighlight();
+    hoverConnection(connection: Connection | null): void {
+        if (this.hoveredConnection) {
+            this.hoveredConnection.unhighlight();
         }
-        this.hoveredEdge = edge;
-        if (edge) {
-            edge.highlight();
-            this.emit('edgeHover', edge);
-        }
-    }
-
-    hoverHyperEdge(hyperEdge: HyperEdge | null): void {
-        if (this.hoveredHyperEdge) {
-            this.hoveredHyperEdge.unhighlight();
-        }
-        this.hoveredHyperEdge = hyperEdge;
-        if (hyperEdge) {
-            hyperEdge.highlight();
-            this.emit('hyperEdgeHover', hyperEdge);
+        this.hoveredConnection = connection;
+        if (connection) {
+            connection.highlight();
+            this.emit('connectionHover', connection);
         }
     }
 

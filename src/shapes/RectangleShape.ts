@@ -75,4 +75,10 @@ export class RectangleShape extends Shape {
         const hh = this.height / 2;
         return Math.abs(pointX - centerX) <= hw && Math.abs(pointY - centerY) <= hh;
     }
+
+    containsPoint(pointX: number, pointY: number, centerX: number, centerY: number): boolean {
+        const hw = this.width / 2 * 1.15;
+        const hh = this.height / 2 * 1.15;
+        return Math.abs(pointX - centerX) <= hw && Math.abs(pointY - centerY) <= hh;
+    }
 }

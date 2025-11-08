@@ -1,286 +1,322 @@
-# ARCHITECTURE.md
+# Zoomies.js Architecture
 
-## File Structure
+## Overview
+
+Zoomies.js is a **force-directed graph visualization library** with hierarchical layers, physics-based layout, and zoom-aware LOD rendering.
+
+**Key Concept**: Entities exist in a flat list with optional hierarchy (via `parent` references and `children` arrays). The visualization supports infinite zoom with layer-based detail levels.
+
+---
+
+## Core Principles
+
+1. **Flat API**: Works with `Entity[]` + `Connection[]` lists, not nested trees
+2. **Hierarchical Semantics**: Entities can have `parent` and `children` for logical grouping
+3. **Synthetic Edges**: Parent-child edges automatically generated and merged from user edges
+4. **Layer-Based LOD**: Zoom maps to layers; higher layers shown less detail as you zoom out
+5. **Scale-Invariant Physics**: Force magnitudes adapt to node sizes for stable simulation
+
+---
+
+## Entity Architecture
+
+### Entity (`src/core/Entity.ts`)
+
+```text
+Entity
+  - id: string
+  - x, y: number                   // position
+  - vx, vy: number                 // velocity (physics)
+  - radius: number                 // size
+  - layer: number                  // hierarchy level (0 = deepest)
+  - parent: Entity | null          // parent composite
+  - children: Entity[]             // direct children (if composite)
+  - visible: boolean               // rendering visibility
+  - collapsed: boolean             // children hidden (UI state)
+  - connections: Connection[]      // edges involving this entity
+  - internalConnections: Connection[]  // edges between children
+  - attributes: Record<string, any>    // user metadata
+  - methods:
+      - isComposite(): boolean     // has children
+      - setPosition(x, y)
+      - setOpacity(alpha)
+      - collapse()
+      - expand()
+```
+
+### Connection (`src/core/Connection.ts`)
+
+```text
+Connection
+  - id: string
+  - sources: Entity[]              // source nodes
+  - targets: Entity[]              // target nodes
+  - subEdges: SubEdge[]            // internal/synthetic edge list
+  - hidden: boolean                // inter-composite edges hidden
+  - attributes: Record<string, any>
+  - synthetic: boolean             // auto-generated edge
+  - methods:
+      - addSubEdge(type, source, target)
+```
+
+---
+
+## Manager System
+
+### 1. GraphManager (`src/managers/GraphManager.ts`)
+
+**Central orchestrator** - handles data, rendering, physics, interactions, zoom.
+
+**Key Methods:**
+- `buildGraph(entities, connections)` - Process flat lists, generate synthetic edges, merge edges
+- `enablePhysics()` / `disablePhysics()` - Toggle force simulation
+- `adjustZoom(delta, focusPoint)` - Zoom with mouse-aware focus
+- `update()` - Main render loop
+- `start()` / `stop()` - Animation loop control
+
+**Internal Flow:**
+```
+wheel event → adjustZoom() → setZoom(animated) 
+  → zoomManager.animateToTargetZoom()
+  → onZoomChange callback → renderer.setCamera() + updateVisibility()
+  → updatePhysicsForVisibleLayers()
+  → physicsEngine.setVisibleEntities()  // freeze out-of-view entities
+  → renderer.clear() + drawComposites() + drawConnections() + drawNodes() + render()
+```
+
+### 2. LayerDetailManager (`src/managers/LayerDetailManager.ts`) - **NEW**
+
+**Manages zoom-to-layer mapping and rendering detail levels.**
+
+**Architecture:**
+- Logarithmic layer scaling: `zoomPerLayer = log₂(layerScaleFactor)` (auto-computed)
+- Flexible zoom window: `zoomWindowSize = log₂(layerScaleFactor) × 3` (auto-computed)
+- Smooth interpolation: opacity/detail based on distance from window center
+
+**Key Methods:**
+- `getVisibleLayerRange(zoomLevel)` - Returns min/max layer indices in view
+- `getVisibleEntities(allEntities, zoomLevel)` - Filter entities for physics/rendering
+- `getDetailStateAtZoom(entity, zoomLevel)` - Returns rendering detail state
+  ```text
+  DetailState {
+    visible: boolean                 // within zoom window
+    opacity: number (0-1)            // fade towards window edge
+    showBorder: boolean              // render border
+    backgroundOpacity: number (0.15-1.0)  // composite bg opacity
+    labelInside: boolean             // label position
+    showChildren: boolean            // render children
+    collapseState: number (0-1)      // interpolated collapse
+  }
+  ```
+- `getNodeRadiusAtLayer(relativeRadius, layer)` - Compute node size: `radius = relativeRadius × layerScaleFactor^layer`
+
+**Configuration (only requires one parameter):**
+```typescript
+new LayerDetailManager({
+  layerScaleFactor: 3      // all zoom params auto-computed from this
+})
+```
+
+**Auto-Computed Parameters:**
+- `zoomPerLayer = log₂(layerScaleFactor)` → zoom units per layer (e.g., log₂(3) ≈ 1.585)
+- `zoomWindowSize = log₂(layerScaleFactor) × 3` → visible layer span (e.g., ≈ 4.755)
+- These adapt dynamically when layerScaleFactor changes
+
+### 3. PhysicsEngine (`src/managers/PhysicsEngine.ts`)
+
+**Force-directed layout with layer-based simulation.**
+
+**Forces Applied (in sequence):**
+
+- **Step 1: Repulsion** - Nodes repel each other (inverse-square, scale-invariant)
+- **Step 2: Spring Tension** - Connected nodes attract along edges  
+- **Step 2b: Synthetic Edge Skip** - Synthetic edges (parent-child) skipped for force (visual only)
+- **Step 3: Parent Center Attraction** - Child nodes attracted to parent's center (50% strength)
+- **Step 3b: Branching Point Attraction** - Nodes with inter-composite edges attracted to boundary intersection point where edge visually branches (strength: `branchingEdgeAttractionStrength`)
+- **Step 4: Layer Center Attraction** - Top-level nodes (no parent) attracted to their layer's center of gravity
+
+**Features:**
+- Stratified simulation: entities grouped by layer index (`layers[]`)
+- Scale-invariant forces: `force × (avgRadius / 15)` multiplier
+- Constraint enforcement: keeps entities within parent composites
+- Visibility-based optimization: `setVisibleEntities()` freezes out-of-view nodes
+
+**Key Methods:**
+- `init(root)` - Build layer hierarchy
+- `simulateLayer(layerIndex)` - Run physics for one layer
+- `setVisibleEntities(entities)` - Freeze non-visible entities (velocity = 0)
+- `pinNode(entity, x, y)` / `unpinNode(entity)` - Drag constraints
+
+**Configuration:**
+- `centerAttractionStrength: 0.01` - Global gravity strength (× 0.5 for parent center)
+- `branchingEdgeAttractionStrength: 0.05` - Attraction to branching points
+
+### 4. ZoomManager (`src/managers/ZoomManager.ts`)
+
+**Manages zoom level and animations.**
+
+**Features:**
+- Zoom level range: `[-3, 3]` (configurable)
+- Smooth animation: ease-in-out-quad, 2ms duration
+- Mouse-aware zoom: focuses animation towards cursor position
+- Camera adjustment: `offsetX/Y` adjusted to keep focus point under cursor
+
+**Key Methods:**
+- `setZoom(level, animate, focusPoint)` - Set target zoom (with optional animation)
+- `animateToTargetZoom()` - Internal animation loop
+- `onZoomChange` - Callback hook for camera/visibility updates
+
+### 5. Renderer (`src/rendering/Renderer.ts`)
+
+**PixiJS WebGL rendering with zoom-aware LOD.**
+
+**Features:**
+- GPU-accelerated via PixiJS v8
+- Dynamic detail state: uses `LayerDetailManager.getDetailStateAtZoom()` for zoom-aware rendering
+- Synthetic edge visualization: branches from composite borders to actual nodes
+- Branching edge opacity: fades with child node detail state (scales by `childOpacity × 0.6`)
+- Camera transform: scale + offset
+
+**Key Methods:**
+- `drawNode(entity)` - Render single node
+- `drawComposite(entity)` - Render composite with children
+- `drawConnection(connection)` - Render edge with branching for synthetic edges (opacity-aware)
+- `setCamera(scale, offsetX, offsetY)` - Update view transform
+- `render()` - Flush PixiJS render
+
+**Integration:**
+- Stores reference to `layerDetailManager` passed from GraphManager
+- Fetches detail states during edge rendering to determine branching segment opacity
+
+### 6. InteractionManager (`src/managers/InteractionManager.ts`)
+
+**User input handling: drag, select, hover.**
+
+**Features:**
+- Node selection (single/multi with Ctrl/Cmd)
+- Node dragging with physics pinning
+- Canvas panning
+- Hover highlight
+
+---
+
+## Data Flow Diagram
+
+```
+User Input (wheel, mouse)
+        ↓
+GraphManager.bindInteractions()
+        ↓
+adjustZoom(delta, focusPoint) / drag / pan
+        ↓
+ZoomManager.animateToTargetZoom() [ease-in-out-quad]
+        ↓
+onZoomChange callback
+  ├─→ renderer.setCamera(scale, offsetX, offsetY)
+  ├─→ updateVisibility()
+  └─→ updatePhysicsForVisibleLayers()
+        ↓
+LayerDetailManager.getVisibleEntities(zoom)
+        ↓
+PhysicsEngine.setVisibleEntities(filtered)
+        ↓
+PhysicsEngine.simulateLayer() [only visible layers]
+        ↓
+update() render loop
+  ├─→ Renderer.drawComposites()
+  ├─→ Renderer.drawConnections()
+  ├─→ Renderer.drawNodes()
+  └─→ Renderer.render()
+```
+
+---
+
+## Zoom Window Concept
+
+**How zoom parameters auto-compute and control multi-layer visibility:**
+
+```
+Configuration:
+  layerScaleFactor = 3         // user specifies only this
+
+Auto-Computed:
+  zoomPerLayer = log₂(3) ≈ 1.585          // zoom units per layer
+  zoomWindowSize = 1.585 × 3 ≈ 4.755      // layer units visible at once
+
+At Zoom Level 2.3:
+  Primary Layer: layerOffset - (2.3 / 1.585) ≈ 2
+  Window Radius: 4.755 / 2 ≈ 2.38 layer-units
+  
+  Visible Layer Range: [ceil(2 - 2.38), floor(2 + 2.38)] = [0, 4]
+
+Entity Opacity Interpolation:
+  - Layer 0: distance = |0 - 2| / 2.38 ≈ 0.84, opacity ≈ 0.16
+  - Layer 1: distance = |1 - 2| / 2.38 ≈ 0.42, opacity ≈ 0.58
+  - Layer 2: distance = |2 - 2| / 2.38 ≈ 0.0,  opacity ≈ 1.0
+  - Layer 3: distance = |3 - 2| / 2.38 ≈ 0.42, opacity ≈ 0.58
+  - Layer 4: distance = |4 - 2| / 2.38 ≈ 0.84, opacity ≈ 0.16
+```
+
+**Key Insight:**
+- Zoom parameters use logarithmic scaling (`log₂`) to match camera zoom (which is exponential base 2)
+- When `layerScaleFactor` changes, zoom fading automatically adapts
+- Relationship ensures each layer traversal requires consistent zoom units
+
+**Benefits:**
+- Smooth fading between layers (no hard pop-in/out)
+- Customizable view (adjust layerScaleFactor; window size follows automatically)
+- Physics only simulates visible entities (performance)
+- Rendering adapts detail state per layer (border, bg opacity, children)
+
+---
+
+## File Organization
 
 ```
 src/
-├── index.ts                    # Main entry point, exports public API
-├── core/                       # Core entity classes
-│   ├── Node.ts                # Graph node with Shape integration
-│   ├── Edge.ts                # Edge with hierarchical support
-│   ├── HyperEdge.ts          # Multi-source/target edges
-│   └── Module.ts              # Hierarchical container extending Node
-├── managers/                   # Simulation and interaction logic
-│   ├── GraphManager.ts        # Main scene orchestrator
-│   ├── PhysicsEngine.ts       # Modular physics with Shape integration
-│   ├── InteractionManager.ts  # User interactions (drag, select, hover)
-│   └── ZoomManager.ts         # Zoom level and layer visibility
-├── rendering/                  # GPU-accelerated rendering
-│   └── Renderer.ts            # Pixi.js WebGL renderer
-└── shapes/                     # Geometry abstraction
-    ├── Shape.ts               # Abstract base class
-    ├── CircleShape.ts         # Circular geometry
-    └── RectangleShape.ts      # Rectangular geometry (with rounded corners)
+├── core/
+│   ├── Entity.ts           # Node with layer hierarchy
+│   ├── Connection.ts       # Edge with sub-edges
+│   └── Shape.ts            # Shape base (unused in current version)
+├── managers/
+│   ├── GraphManager.ts     # Main orchestrator
+│   ├── LayerDetailManager.ts   # Zoom-to-layer mapping (NEW)
+│   ├── PhysicsEngine.ts    # Force simulation
+│   ├── InteractionManager.ts   # User input
+│   └── ZoomManager.ts      # Zoom level + animation
+├── rendering/
+│   └── Renderer.ts         # PixiJS rendering
+├── index.ts                # Public API export
+└── __tests__/              # Jest unit tests
 ```
 
 ---
 
-### **1. Node Class** (`src/core/Node.ts`)
+## Key Design Decisions
 
-```text
-Node
-  - id: string
-  - layer: integer                  // zoom/abstraction level
-  - attributes: object              // user-defined (colour, cornerRadius, domain metadata)
-  - selected: boolean
-  - visible: boolean
-  - shape: 'circle' | 'rectangle'
-  - shapeObject: Shape              // polymorphic geometry handler
-  - radius, width, height: number
-  - x, y, vx, vy: number            // position and velocity
-  - methods:
-      - highlight()
-      - select()
-      - deselect()
-      - setPosition(x, y)
-      - setOpacity(alpha)
-      - updateAttribute(key, value)
-      - getVisibility(zoomLevel)
-```
+1. **Flat List API**: Easier to use than nested trees; supports arbitrary hierarchies
+2. **Synthetic Edges**: Auto-generate and merge parent-child connections for clean visualization
+3. **Inter-composite Edge Hiding**: Mark edges between different parents as hidden; visualize via synthetic edges with branching
+4. **Layer-Based LOD**: Zoom level maps cleanly to abstraction layers; smooth interpolation via opacity
+5. **Visible Entity Filtering**: Only simulate/render entities in zoom window (major performance win for large hierarchies)
+6. **Scale-Invariant Physics**: Forces scale by `avgRadius / 15` so large/small nodes behave consistently
+7. **Ease-in-out-quad Animation**: Responsive zoom feel without aggressive acceleration/jitter
 
 ---
 
-### **2. Edge Class** (`src/core/Edge.ts`)
+## Performance Optimization
 
-```text
-Edge
-  - id: string
-  - source: Node
-  - target: Node
-  - sourceModule, targetModule: Module  // for hierarchical edges
-  - attributes: object              // user-defined (weight, style, type)
-  - hidden: boolean
-  - methods:
-      - highlight()
-      - setOpacity(alpha)
-      - updateAttribute(key, value)
-```
+- **Physics**: Only simulates visible layers (`PhysicsEngine.setVisibleEntities()`)
+- **Rendering**: Only renders entities in zoom window (via detail state opacity)
+- **Connections**: Synthetic edges reduce edge count by merging parent-child connections
+- **Caching**: `entity.connections` and `entity.internalConnections` cached by `buildGraph()`
 
 ---
 
-### **3. HyperEdge Class** (`src/core/HyperEdge.ts`)
+## Future Enhancements
 
-```text
-HyperEdge extends Edge
-  - supports multiple sources and targets
-  - dynamic summarization when nodes/modules collapse
-  - methods:
-      - summarizeEdge(newSources, newTargets)
-      - expandEdge()
-```
-
----
-
-### **4. Module Class** (`src/core/Module.ts`)
-
-```text
-Module extends Node
-  - children: Node[]               // children (can be Modules recursively)
-  - edges: Edge[]                  // internal edges
-  - hyperEdges: HyperEdge[]
-  - summaryEdges: Edge[]           // edges connecting outside modules
-  - collapsed: boolean
-  - methods:
-      - collapse()
-      - expand()
-      - updateSummaryEdges()
-      - setLayer(level)
-      - getLeafNodes()             // recursive leaf collection
-      - getAllModules()            // recursive module collection
-      - getVisibleChildren()       // collapse-aware visibility
-```
-
----
-
-### **5. Shape System** (`src/shapes/`)
-
-```text
-Shape (abstract)
-  - getRandomInteriorPoint(centerX, centerY) → {x, y}
-  - getBorderPoint(centerX, centerY, targetX, targetY) → {x, y}
-  - isInside(pointX, pointY, centerX, centerY) → boolean
-  - enforceConstraint(pointX, pointY, vx, vy, centerX, centerY, margin) → {x, y, vx, vy}?
-
-CircleShape extends Shape
-  - radius: number
-  - implements all geometry methods for circles
-
-RectangleShape extends Shape
-  - width, height: number
-  - cornerRadius: number           // visual only, not physics
-  - implements all geometry methods for rectangles
-```
-
-**Integration:**
-- `Node.shapeObject` provides polymorphic geometry calculations
-- Physics engine uses `shapeObject.enforceConstraint()` for boundaries
-- Renderer uses `shapeObject.getBorderPoint()` for edge connections
-- Module initialization uses `shapeObject.getRandomInteriorPoint()`
-
----
-
-### **6. Graph Manager** (`src/managers/GraphManager.ts`)
-
-```text
-GraphManager
-  - nodes: Node[]
-  - edges: Edge[]
-  - modules: Module[]
-  - renderer: Renderer
-  - physicsEngine: PhysicsEngine
-  - interactionManager: InteractionManager
-  - zoomManager: ZoomManager
-  - methods:
-      - addNode(node)
-      - removeNode(node)
-      - addEdge(edge)
-      - removeEdge(edge)
-      - addModule(module)
-      - getVisibleNodes()          // layer + collapse aware
-      - getVisibleEdges()          // hierarchical edge filtering
-      - update()                   // main render loop
-      - collapseModule(module)
-      - expandModule(module)
-```
-
----
-
-### **7. Physics Engine** (`src/managers/PhysicsEngine.ts`)
-
-**Stratified Physics Architecture:**
-- Module-level physics: modules repel each other
-- Internal physics: each module runs independent simulation for children
-- Hard boundary constraints: teleportation + velocity reflection
-
-```text
-PhysicsEngine
-  - nodes, edges, modules
-  - damping: 0.92
-  - repulsionStrength: 80
-  - methods:
-      - init(nodes, edges, hyperEdges, modules)
-      - simulationStep()
-          → module-level physics
-          → simulateModuleInternal() per module
-      - simulateModuleInternal(module)
-          → child-child repulsion (isolated)
-          → edge attractions (within module)
-          → enforceModuleBoundary() (hard constraint)
-      - enforceModuleBoundary(child, module)
-          → uses module.shapeObject.enforceConstraint()
-      - applyRepulsion(node1, node2, strength)
-      - applyAttraction(edge)
-```
-
----
-
-### **8. Interaction Manager** (`src/managers/InteractionManager.ts`)
-
-```text
-InteractionManager
-  - selectedNodes: Node[]
-  - draggedNode: Node?
-  - pinnedNodes: Set<Node>         // prevents physics updates
-  - methods:
-      - selectNode(node, multi=false)
-      - deselectNode(node)
-      - hoverNode(node)
-      - dragNode(node)              // sets pinned during drag
-      - endDrag(node)
-      - handleCanvasDrag()          // pan camera
-      - on(event, callback)
-```
-
----
-
-### **9. Renderer** (`src/rendering/Renderer.ts`)
-
-**Pixi.js GPU-Accelerated Rendering:**
-- WebGL Graphics objects cached per node/edge
-- Container hierarchy: worldContainer → edgeContainer, nodeContainer, labelContainer
-- Camera transform via worldContainer.position
-
-```text
-Renderer
-  - app: Pixi.Application
-  - worldContainer: Container
-  - nodeGraphics: Map<Node, Graphics>
-  - edgeGraphics: Map<Edge, Graphics>
-  - nodeLabels: Map<Node, Text>
-  - methods:
-      - init()
-      - clear()
-      - drawNode(node)
-          → uses node.shapeObject for geometry
-          → supports rounded corners via attributes.cornerRadius
-      - drawEdge(edge, modules)
-          → detects cross-module edges
-          → draws 3-segment branching (node → module border → module border → node)
-          → uses shapeObject.getBorderPoint() for connections
-      - drawModule(module)
-          → supports rounded corners
-      - getEdgeConnectionPoint(fromNode, toNode)
-          → delegates to fromNode.shapeObject.getBorderPoint()
-      - setCamera(offsetX, offsetY, scale)
-      - resize()
-```
-
-**Hierarchical Edge Visualization:**
-- Intra-module edges: direct connection
-- Cross-module edges: 3 segments with border intersection points
-  1. Source node → source module border
-  2. Source module border → target module border (thicker)
-  3. Target module border → target node
-
----
-
-### **10. Zoom Manager** (`src/managers/ZoomManager.ts`)
-
-```text
-ZoomManager
-  - zoomLevel: float
-  - minZoom, maxZoom
-  - methods:
-      - setZoom(level)
-      - getNodeVisibility(node)    // layer-based opacity
-      - handleWheel(event)
-```
-
----
-
-### **11. Typical Flow**
-
-1. Initialize **GraphManager** with domain-agnostic nodes/edges
-2. Create **modules** hierarchically with shape properties
-3. Bind **interactions** via InteractionManager (drag, select, pan)
-4. Initialize **physics** with modular constraints
-5. **Render loop**: 
-   - PhysicsEngine.simulationStep()
-   - Renderer draws all visible elements
-   - Shape system handles all geometry calculations
-6. **Zoom events** → opacity transitions, module expand/collapse
-7. **Dynamic updates**: add/remove nodes, edges, modules at runtime
-
----
-
-**Key Features:**
-
-* **GPU-accelerated rendering**: Pixi.js WebGL with cached Graphics objects
-* **Polymorphic shape system**: OOP geometry abstraction (circle, rectangle + rounded corners)
-* **Stratified physics**: module-level + independent internal simulations
-* **Hard boundary constraints**: teleportation with velocity reflection
-* **Hierarchical edge visualization**: automatic branching at module borders
-* **Fully generic**: domain-agnostic node/edge attributes
-* **Modular architecture**: clean separation (core/managers/rendering/shapes)
-
----
+- Per-layer rendering state (border style, label style, bg color)
+- Dynamic node radius scaling based on layer
+- Advanced physics filters (e.g., only simulate children of same parent)
+- Multi-select drag
+- Animated expand/collapse transitions

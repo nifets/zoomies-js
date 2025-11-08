@@ -37,4 +37,11 @@ export class CircleShape extends Shape {
         const dist = Math.sqrt(dx * dx + dy * dy);
         return dist <= this.radius * 0.95;
     }
+
+    containsPoint(pointX: number, pointY: number, centerX: number, centerY: number): boolean {
+        const dx = pointX - centerX;
+        const dy = pointY - centerY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        return dist <= this.radius * 1.1;
+    }
 }
