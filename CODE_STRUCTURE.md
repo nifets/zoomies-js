@@ -27,6 +27,8 @@
 
 **Methods:**
 - public setPosition(): void
+- public updateShapeObject(): void
+- public getResolvedShapeType(): string
 - public isComposite(): boolean
 - public getAllChildren(): Entity
 - public getVisibleChildren(): Entity
@@ -136,6 +138,7 @@
 ## src/managers/LayerDetailManager.ts
 
 **Exports:**
+- interface LayerMetadata
 - interface LayerDetailConfig
 - class LayerDetailManager
 - interface DetailState
@@ -150,6 +153,11 @@
 - public getVisibleEntities(): Entity
 - public getDetailStateAtZoom(): DetailState
 - public getNodeRadiusAtLayer(): number
+- public getLayerMetadata(): LayerMetadata
+- public getLayerEntityShape(): string
+- public getLayerEntityColour(): string
+- public getLayerEdgeColour(): string
+- public getLayerScale(): number
 - public getLayersInHierarchy(): number
 
 ---
@@ -220,6 +228,7 @@
 - class CircleShape
 
 **Methods:**
+- public getType(): string
 - public isInside(): boolean
 - public containsPoint(): boolean
 
@@ -231,6 +240,7 @@
 - class RectangleShape
 
 **Methods:**
+- public getType(): string
 - public isInside(): boolean
 - public containsPoint(): boolean
 
@@ -240,6 +250,13 @@
 
 **Exports:**
 - abstract class Shape
+
+---
+
+## src/shapes/ShapeFactory.ts
+
+**Exports:**
+- class ShapeFactory
 
 ---
 

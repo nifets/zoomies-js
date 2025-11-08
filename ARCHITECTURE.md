@@ -124,14 +124,14 @@ new LayerDetailManager({
 
 #### Layer Metadata: Per-Layer Customisation
 
-Customize appearance and scaling on a per-layer basis via `LayerMetadata`:
+Customise appearance and scaling on a per-layer basis via `LayerMetadata`:
 
 ```typescript
 interface LayerMetadata {
-    entityShape?: 'circle' | 'rectangle';  // override entity shape for this layer
-    entityColour?: string;                  // override entity colour for this layer
-    edgeColour?: string;                    // override edge colour for this layer
-    relativeScale?: number;                 // scale relative to previous layer
+    entityShape?: string;      // override entity shape for this layer (e.g., 'circle', 'rectangle')
+    entityColour?: string;     // override entity colour for this layer
+    edgeColour?: string;       // override edge colour for this layer
+    relativeScale?: number;    // scale relative to previous layer
 }
 ```
 
@@ -160,36 +160,15 @@ const zoomies = new Zoomies('#canvas', entities, connections, {
 });
 ```
 
-**Resolution Priority (highest to lowest):**
-
-1. Entity-level attributes (`entity.shape`, `entity.colour`)
-2. Layer metadata from `LayerDetailManager`
-3. Defaults (circle, #3498db, #95a5a6)
-
-Entity-level attributes always override layer metadata, allowing mixed styling within a layer.
+**Resolution:** Entity attributes → Layer metadata → Defaults. Entity-level attributes always override layer metadata.
 
 #### Per-Layer Scaling
 
-`relativeScale` defines cumulative scaling from layer 0 to layer N:
+`relativeScale` multiplies cumulatively: `radius(n) = relativeRadius × scale[0] × ... × scale[n]`
 
-- If all layers have `relativeScale: 2`, then `radius(layer=n) = relativeRadius × 2^n`
-- If layers have different scales, they're multiplied: `radius(layer=n) = relativeRadius × scale[0] × scale[1] × ... × scale[n]`
-- `getNodeRadiusAtLayer()` computes this automatically from metadata
+#### Shape System
 
-#### Shape Encapsulation
-
-Shape information is encapsulated in the `Shape` class hierarchy:
-
-- `Shape.getType()` - Get shape identifier ('circle', 'rectangle')
-- `ShapeFactory.createShape()` - Factory method to instantiate shapes (single point to add new shape types)
-- Entity.updateShapeObject() - Updates internal shape geometry when layer metadata overrides shape type
-- Renderer calls `updateShapeObject()` before rendering if shape differs from current
-
-This design ensures:
-
-- New shape types require changes only in `Shape` class and `ShapeFactory`, not scattered throughout code
-- Geometry calculations always use correct shape (no stale shapeObject)
-- Entity doesn't duplicate shape information
+Shape types are extensible strings (not enum). Add new shapes by creating `Shape` subclass and updating `ShapeFactory`. Entity attributes override layer metadata.
 
 ### 3. PhysicsEngine (`src/managers/PhysicsEngine.ts`)
 
