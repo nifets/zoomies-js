@@ -1,8 +1,15 @@
 /**
  * Abstract base class for node shapes.
  * Encapsulates geometry calculations for different shape types.
+ * Subclasses should store all shape-specific parameters internally.
  */
 export abstract class Shape {
+    /**
+     * Get the type identifier for this shape.
+     * Used for serialisation and factory construction.
+     */
+    abstract getType(): string;
+
     /**
      * Get a random point inside the shape.
      */

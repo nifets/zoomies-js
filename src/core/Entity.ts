@@ -1,6 +1,5 @@
 import { Shape } from '../shapes/Shape';
-import { CircleShape } from '../shapes/CircleShape';
-import { RectangleShape } from '../shapes/RectangleShape';
+import { ShapeFactory } from '../shapes/ShapeFactory';
 import { Connection } from './Connection';
 
 /**
@@ -22,10 +21,10 @@ export class Entity {
     layer: number;
     colour: string;
     radius: number;
-    shape: 'circle' | 'rectangle';
-    width?: number; // For rectangles
-    height?: number; // For rectangles
-    shapeObject: Shape;
+    shape?: string; // Optional shape type identifier (e.g., 'circle', 'rectangle', or custom types). Can be overridden by layer metadata.
+    width?: number; // For shapes that use width (e.g., rectangles)
+    height?: number; // For shapes that use height (e.g., rectangles)
+    shapeObject: Shape; // Internal shape for geometric calculations (always initialized)
     attributes: Record<string, any>;
     selected: boolean;
     alpha: number;
@@ -65,21 +64,21 @@ export class Entity {
         this.alpha = 1;
         this.parent = null;
 
-        // Determine shape type
-        this.shape = attributes.shape ?? 'circle';
+        // Determine shape type (optional - can be overridden by layer metadata)
+        this.shape = attributes.shape;
         this.width = (attributes.width ?? (this.radius * 2)) * layerScale;
         this.height = (attributes.height ?? (this.radius * 2)) * layerScale;
         
-        // Initialize shape object based on type
-        if (this.shape === 'rectangle') {
-            const width = (attributes.width ?? 60) * layerScale;
-            const height = (attributes.height ?? 40) * layerScale;
-            const cornerRadius = attributes.cornerRadius ?? 0;
-            this.shapeObject = new RectangleShape(width, height, cornerRadius);
-        } else {
-            const radius = (attributes.radius ?? 15) * layerScale;
-            this.shapeObject = new CircleShape(radius);
-        }
+        // Initialize shape object using factory
+        // Defaults to 'circle' if entity shape not explicitly set
+        const shapeType = this.shape ?? 'circle';
+        this.shapeObject = ShapeFactory.createShape(
+            shapeType,
+            this.radius,
+            this.width,
+            this.height,
+            attributes.cornerRadius ?? 0
+        );
         
         // Container properties - only initialized if this is a composite
         this.children = attributes.nodes ?? attributes.children ?? [];
@@ -102,6 +101,29 @@ export class Entity {
     setPosition(x: number, y: number): void {
         this.x = x;
         this.y = y;
+    }
+
+    /**
+     * Update the shapeObject to match the resolved shape type (from entity or layer metadata).
+     * Uses ShapeFactory to create appropriate shape instance.
+     * This should be called when rendering if layer metadata might override the shape.
+     * 
+     * @param shapeType - Shape type identifier (e.g., 'circle', 'rectangle', or custom types)
+     */
+    updateShapeObject(shapeType: string): void {
+        this.shapeObject = ShapeFactory.createShape(shapeType, this.radius, this.width, this.height, this.attributes.cornerRadius);
+    }
+
+    /**
+     * Get the resolved shape type for this entity.
+     * Prioritises entity-level shape over layer metadata defaults.
+     * If no explicit shape is set, returns 'circle' as default.
+     * Note: Caller should use this result to call updateShapeObject() if rendering with layer metadata.
+     * 
+     * @returns Shape type identifier as string (e.g., 'circle', 'rectangle')
+     */
+    getResolvedShapeType(): string {
+        return this.shape ?? 'circle';
     }
 
     /**

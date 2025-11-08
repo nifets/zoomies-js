@@ -1,6 +1,17 @@
 import { Entity } from '../core/Entity';
 
 /**
+ * Per-layer metadata for customisation of entity shape, colour, and scaling.
+ * All fields are optional; missing fields fall back to defaults.
+ */
+export interface LayerMetadata {
+    entityShape?: string; // Shape type identifier (e.g., 'circle', 'rectangle', or custom types)
+    entityColour?: string;
+    edgeColour?: string;
+    relativeScale?: number; // Scale relative to the layer below (default: layerScaleFactor)
+}
+
+/**
  * Configuration for layer detail management.
  */
 export interface LayerDetailConfig {
@@ -15,12 +26,13 @@ export interface LayerDetailConfig {
     detailedBgOpacity?: number;
     collapsedBgOpacity?: number;
     showChildrenThreshold?: number;
+    layerMetadata?: Map<number, LayerMetadata>; // Per-layer customisation
 }
 
 /**
  * Default layer detail configuration.
  */
-const DEFAULT_LAYER_DETAIL_CONFIG: Required<LayerDetailConfig> = {
+const DEFAULT_LAYER_DETAIL_CONFIG: Omit<Required<LayerDetailConfig>, 'layerMetadata'> = {
     layerScaleFactor: 5,
     zoomRangeMin: -3,
     zoomRangeMax: 3,
@@ -43,16 +55,22 @@ const DEFAULT_LAYER_DETAIL_CONFIG: Required<LayerDetailConfig> = {
  * - A "zoom window" defines how many layers are visible at once
  * - Within the window, opacity and detail interpolate smoothly based on distance from center
  * - Only entities within the visible layer range are simulated/rendered (performance optimization)
+ * - Per-layer metadata allows customisation of shape, colour, and scaling per layer
  */
 export class LayerDetailManager {
-    config: Required<LayerDetailConfig>;
+    config: Required<Omit<LayerDetailConfig, 'layerMetadata'>> & { layerMetadata?: Map<number, LayerMetadata> };
     minLayer: number;
     maxLayer: number;
     layerOffset: number;
+    layerMetadata: Map<number, LayerMetadata>;
     
     constructor(config: LayerDetailConfig = {}) {
-        // Merge user config with defaults
-        this.config = { ...DEFAULT_LAYER_DETAIL_CONFIG, ...config };
+        // Merge user config with defaults, keeping layerMetadata separate
+        const { layerMetadata, ...configWithoutMetadata } = config;
+        this.config = { ...DEFAULT_LAYER_DETAIL_CONFIG, ...configWithoutMetadata, layerMetadata };
+        
+        // Initialize layer metadata
+        this.layerMetadata = layerMetadata ?? new Map();
         
         this.minLayer = 0;
         this.maxLayer = 10; // Default, will be updated by setHierarchyLayers()
@@ -224,12 +242,58 @@ export class LayerDetailManager {
 
     /**
      * Calculate the actual radius for a node based on its layer and relative size.
-     * User specifies relative size (default 1), we scale by layer factor.
+     * Uses per-layer relative scale if specified in metadata, otherwise uses global layerScaleFactor.
+     * Scales cumulatively: radius = relativeRadius × scale[0] × scale[1] × ... × scale[layer]
      */
     getNodeRadiusAtLayer(relativeRadius: number, layer: number): number {
-        // Each layer scales by layerScaleFactor (exponential)
-        const layerScale = Math.pow(this.config.layerScaleFactor, layer);
-        return relativeRadius * layerScale;
+        // Cumulative scaling from layer 0 to target layer
+        let cumulativeScale = 1;
+        for (let i = 0; i < layer; i++) {
+            cumulativeScale *= this.getLayerScale(i);
+        }
+        return relativeRadius * cumulativeScale;
+    }
+
+    /**
+     * Get layer metadata for a given layer index.
+     * Returns the metadata if specified, otherwise undefined.
+     */
+    getLayerMetadata(layer: number): LayerMetadata | undefined {
+        return this.layerMetadata.get(layer);
+    }
+
+    /**
+     * Get entity shape for a layer, falling back to default.
+     * @returns Shape type identifier as string (e.g., 'circle', 'rectangle')
+     */
+    getLayerEntityShape(layer: number): string {
+        return this.layerMetadata.get(layer)?.entityShape ?? 'circle';
+    }
+
+    /**
+     * Get entity colour for a layer, falling back to default.
+     */
+    getLayerEntityColour(layer: number): string {
+        return this.layerMetadata.get(layer)?.entityColour ?? '#3498db';
+    }
+
+    /**
+     * Get edge colour for a layer, falling back to default.
+     */
+    getLayerEdgeColour(layer: number): string {
+        return this.layerMetadata.get(layer)?.edgeColour ?? '#95a5a6';
+    }
+
+    /**
+     * Get relative scale factor for a layer (scale relative to layer below).
+     * If specified in metadata, use that; otherwise use global layerScaleFactor.
+     */
+    getLayerScale(layer: number): number {
+        const metadata = this.layerMetadata.get(layer);
+        if (metadata?.relativeScale !== undefined) {
+            return metadata.relativeScale;
+        }
+        return this.config.layerScaleFactor;
     }
 
     /**

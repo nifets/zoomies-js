@@ -114,8 +114,7 @@
             
             const nodeD = new Entity('Node_D', { 
                 layer: 0, 
-                colour: '#f39c12', 
-                radius: 20,
+                radius: 30,
             });
             
             const nodeE = new Entity('Node_E', { 
@@ -146,9 +145,21 @@
                 width: 2
             });
 
+            // Per-layer metadata: customize appearance for each layer
+            const layerMetadata = new Map();
+            
+            // Layer 0: Blue circles with teal edges, scale 2x to layer 1
+            layerMetadata.set(0, {
+                entityShape: 'rectangle',
+                entityColour: '#3498db',
+                edgeColour: '#17a2b8',
+                relativeScale: 2
+            });
+
             return {
                 entities: [nodeA, nodeB, nodeC, nodeD, nodeE],
-                connections: [connAB, connAC, connBD, connCE]
+                connections: [connAB, connAC, connBD, connCE],
+                layerMetadata: layerMetadata
             };
         }
 
@@ -285,60 +296,82 @@
         }
 
         // ============================================================================
-        // TEST NETWORK 3: Complex Hierarchy (3-level hierarchy)
+        // TEST NETWORK 3: Complex Hierarchy (3-level hierarchy with layer metadata)
         // ============================================================================
         function createComplexHierarchy() {
             // Level 0: nodes
             const nodes = {
-                n1: new Entity('N1', { layer: 0, colour: '#3498db', radius: 12 }),
-                n2: new Entity('N2', { layer: 0, colour: '#3498db', radius: 12 }),
-                n3: new Entity('N3', { layer: 0, colour: '#2ecc71', radius: 12 }),
-                n4: new Entity('N4', { layer: 0, colour: '#2ecc71', radius: 12 }),
-                n5: new Entity('N5', { layer: 0, colour: '#f39c12', radius: 12 }),
-                n6: new Entity('N6', { layer: 0, colour: '#f39c12', radius: 12 }),
+                n1: new Entity('N1', { layer: 0, radius: 12 }),
+                n2: new Entity('N2', { layer: 0, radius: 12 }),
+                n3: new Entity('N3', { layer: 0, radius: 12 }),
+                n4: new Entity('N4', { layer: 0, radius: 12 }),
+                n5: new Entity('N5', { layer: 0, radius: 12 }),
+                n6: new Entity('N6', { layer: 0, radius: 12 }),
             };
 
             // Level 0: connections
             const edgesL0 = [
-                new Connection('e_n1n2', [nodes.n1], [nodes.n2], { colour: '#95a5a6', width: 1 }),
-                new Connection('e_n3n4', [nodes.n3], [nodes.n4], { colour: '#95a5a6', width: 1 }),
-                new Connection('e_n5n6', [nodes.n5], [nodes.n6], { colour: '#95a5a6', width: 1 }),
+                new Connection('e_n1n2', [nodes.n1], [nodes.n2], { width: 1 }),
+                new Connection('e_n3n4', [nodes.n3], [nodes.n4], { width: 1 }),
+                new Connection('e_n5n6', [nodes.n5], [nodes.n6], { width: 1 }),
             ];
 
             // Level 1: composites of level 0
             const composite1 = new Entity('Comp1', {
                 children: [nodes.n1, nodes.n2],
                 layer: 1,
-                colour: '#ecf0f1',
                 radius: 45
             });
 
             const composite2 = new Entity('Comp2', {
                 children: [nodes.n3, nodes.n4],
                 layer: 1,
-                colour: '#ecf0f1',
                 radius: 45
             });
 
             const composite3 = new Entity('Comp3', {
                 children: [nodes.n5, nodes.n6],
                 layer: 1,
-                colour: '#ecf0f1',
                 radius: 45
             });
 
             // Level 1: connections between composites
             const edgesL1 = [
-                new Connection('e_c1c2', [composite1], [composite2], { colour: '#e67e22', width: 2 }),
-                new Connection('e_c2c3', [composite2], [composite3], { colour: '#e67e22', width: 2 }),
+                new Connection('e_c1c2', [composite1], [composite2], { width: 2 }),
+                new Connection('e_c2c3', [composite2], [composite3], { width: 2 }),
             ];
 
             // Level 2: super-composite
             const superComposite = new Entity('SuperComp', {
                 children: [composite1, composite2, composite3],
                 layer: 2,
-                colour: '#d7bde2',
                 radius: 150
+            });
+
+            // Per-layer metadata: customize appearance for each layer
+            const layerMetadata = new Map();
+            
+            // Layer 0: Blue circles with teal edges, scale 2x to layer 1
+            layerMetadata.set(0, {
+                entityShape: 'circle',
+                entityColour: '#3498db',
+                edgeColour: '#17a2b8',
+                relativeScale: 2
+            });
+
+            // Layer 1: Green rectangles with orange edges, scale 2.5x to layer 2
+            layerMetadata.set(1, {
+                entityShape: 'rectangle',
+                entityColour: '#2ecc71',
+                edgeColour: '#e67e22',
+                relativeScale: 2.5
+            });
+
+            // Layer 2: Purple circles with magenta edges
+            layerMetadata.set(2, {
+                entityShape: 'circle',
+                entityColour: '#9b59b6',
+                edgeColour: '#e91e63'
             });
 
             return {
@@ -346,7 +379,78 @@
                     superComposite, composite1, composite2, composite3,
                     nodes.n1, nodes.n2, nodes.n3, nodes.n4, nodes.n5, nodes.n6
                 ],
-                connections: [...edgesL0, ...edgesL1]
+                connections: [...edgesL0, ...edgesL1],
+                layerMetadata: layerMetadata
+            };
+        }
+
+        // ============================================================================
+        // TEST NETWORK 4: Layer Metadata Demo
+        // Demonstrates per-layer customisation: custom shapes, colours, and scaling
+        // ============================================================================
+        function createMetadataHierarchy() {
+            // Layer 0: Small blue circles
+            const leaf1 = new Entity('Leaf_1', { layer: 0, radius: 12 });
+            const leaf2 = new Entity('Leaf_2', { layer: 0, radius: 12 });
+            const leaf3 = new Entity('Leaf_3', { layer: 0, radius: 12 });
+            const leaf4 = new Entity('Leaf_4', { layer: 0, radius: 12 });
+
+            // Layer 1: Composite containing leaves
+            const middle1 = new Entity('Mid_1', {
+                children: [leaf1, leaf2],
+                layer: 1,
+                radius: 40
+            });
+
+            const middle2 = new Entity('Mid_2', {
+                children: [leaf3, leaf4],
+                layer: 1,
+                radius: 40
+            });
+
+            // Layer 2: Top-level composite
+            const root = new Entity('Root', {
+                children: [middle1, middle2],
+                layer: 2,
+                radius: 80
+            });
+
+            const connections = [
+                new Connection('e1', [leaf1], [leaf2], { width: 1 }),
+                new Connection('e2', [leaf3], [leaf4], { width: 1 }),
+                new Connection('e3', [middle1], [middle2], { width: 2 }),
+            ];
+
+            // Per-layer metadata: customize shape, colour, and edge colour for each layer
+            const layerMetadata = new Map();
+            
+            // Layer 0: Blue circles with teal edges
+            layerMetadata.set(0, {
+                entityShape: 'circle',
+                entityColour: '#3498db',
+                edgeColour: '#17a2b8',
+                relativeScale: 2  // Scale to next layer: 2x
+            });
+
+            // Layer 1: Green rectangles with orange edges
+            layerMetadata.set(1, {
+                entityShape: 'rectangle',
+                entityColour: '#2ecc71',
+                edgeColour: '#e67e22',
+                relativeScale: 2.5  // Scale to next layer: 2.5x
+            });
+
+            // Layer 2: Purple circles with magenta edges
+            layerMetadata.set(2, {
+                entityShape: 'circle',
+                entityColour: '#9b59b6',
+                edgeColour: '#e91e63'
+            });
+
+            return {
+                entities: [root, middle1, middle2, leaf1, leaf2, leaf3, leaf4],
+                connections: connections,
+                layerMetadata: layerMetadata
             };
         }
 
@@ -369,10 +473,20 @@
 
             currentNetwork = networkName;
             
-            // Create Zoomies with flat lists
-            currentZoomies = new Zoomies('#graph-canvas', network.entities, network.connections, {
+            // Create Zoomies with flat lists and optional layer metadata
+            const options = {
                 enablePhysics: true
-            });
+            };
+            
+            // If network has layer metadata, pass it via layerDetailConfig
+            if (network.layerMetadata) {
+                options.layerDetailConfig = {
+                    layerScaleFactor: 3,
+                    layerMetadata: network.layerMetadata
+                };
+            }
+            
+            currentZoomies = new Zoomies('#graph-canvas', network.entities, network.connections, options);
 
             // Update button states
             document.querySelectorAll('.network-btn').forEach(btn => {
@@ -381,6 +495,9 @@
 
             console.log(`[Demo] Loaded network: ${networkName}`);
             console.log(`[Demo] Entities: ${network.entities.length}, Connections: ${network.connections.length}`);
+            if (network.layerMetadata) {
+                console.log(`[Demo] Layer metadata configured for ${network.layerMetadata.size} layers`);
+            }
         }
 
         // ============================================================================

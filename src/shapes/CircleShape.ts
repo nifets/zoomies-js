@@ -8,6 +8,10 @@ export class CircleShape extends Shape {
         super();
     }
 
+    getType(): string {
+        return 'circle';
+    }
+
     getRandomInteriorPoint(centerX: number, centerY: number): { x: number; y: number } {
         const angle = Math.random() * Math.PI * 2;
         const dist = Math.random() * this.radius * 0.7;

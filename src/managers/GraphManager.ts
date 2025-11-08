@@ -4,7 +4,7 @@ import { Renderer } from '../rendering/Renderer';
 import { InteractionManager } from './InteractionManager';
 import { ZoomManager } from './ZoomManager';
 import { PhysicsEngine, PhysicsConfig } from './PhysicsEngine';
-import { LayerDetailManager } from './LayerDetailManager';
+import { LayerDetailManager, LayerDetailConfig } from './LayerDetailManager';
 import { ZoomDebugWidget } from '../debug/ZoomDebugWidget';
 
 /**
@@ -33,13 +33,13 @@ export class GraphManager {
     offsetStartX: number;
     offsetStartY: number;
 
-    constructor(canvas: HTMLCanvasElement, physicsConfig?: PhysicsConfig) {
+    constructor(canvas: HTMLCanvasElement, physicsConfig?: PhysicsConfig, layerDetailConfig?: LayerDetailConfig) {
         this.canvas = canvas;
         this.root = null;
         this.entities = [];
         this.allConnections = [];
         this.zoomManager = new ZoomManager(0, -3, 3);
-        this.layerDetailManager = new LayerDetailManager({
+        this.layerDetailManager = new LayerDetailManager(layerDetailConfig ?? {
             layerScaleFactor: 3
         });
         this.renderer = new Renderer(canvas, this.zoomManager, this.layerDetailManager);

@@ -102,9 +102,20 @@ export class Renderer {
         }
         graphics.clear();
         graphics.alpha = node.alpha * this.getChildNodeOpacity(node);
-        const colour = parseInt((node.colour ?? '#3498db').replace('#', ''), 16);
         
-        if (node.shape === 'rectangle') {
+        // Entity-level attributes take precedence over layer metadata
+        // Only use layer metadata if entity didn't explicitly specify the attribute
+        const nodeShape = node.shape ?? this.layerDetailManager?.getLayerEntityShape(node.layer) ?? 'circle';
+        
+        // If shape differs from current shapeObject's type, update it
+        if (node.shapeObject.getType() !== nodeShape) {
+            node.updateShapeObject(nodeShape);
+        }
+        
+        let nodeColour = node.colour ?? this.layerDetailManager?.getLayerEntityColour(node.layer) ?? '#3498db';
+        const colour = parseInt(nodeColour.replace('#', ''), 16);
+        
+        if (nodeShape === 'rectangle') {
             const w = node.width ?? node.radius * 2;
             const h = node.height ?? node.radius * 2;
             const cornerRadius = node.attributes.cornerRadius ?? 0;
@@ -201,9 +212,8 @@ export class Renderer {
         const opacity = detailState ? detailState.opacity : 1;
         graphics.alpha = connection.alpha * opacity;
         
-        const colour = parseInt((connection.attributes.colour ?? '#95a5a6').replace('#', ''), 16);
-        
-        // Scale edge width by layer (use max layer of endpoints for scaling)
+        // Connection-level colour takes precedence over layer metadata
+        // Only use layer metadata if connection didn't explicitly specify the colour
         let maxLayer = 0;
         for (const source of connection.sources) {
             maxLayer = Math.max(maxLayer, source.layer);
@@ -211,6 +221,10 @@ export class Renderer {
         for (const target of connection.targets) {
             maxLayer = Math.max(maxLayer, target.layer);
         }
+        const edgeColourStr = connection.attributes.colour ?? this.layerDetailManager?.getLayerEdgeColour(maxLayer) ?? '#95a5a6';
+        const colour = parseInt(edgeColourStr.replace('#', ''), 16);
+        
+        // Scale edge width by layer
         const layerScaleFactor = connection.sources[0]?.attributes.layerScaleFactor ?? 5;
         const layerScale = Math.pow(layerScaleFactor, maxLayer);
         const width = (connection.attributes.width ?? 2) * layerScale;

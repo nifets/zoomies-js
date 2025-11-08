@@ -10,6 +10,8 @@ export { ZoomManager } from './managers/ZoomManager';
 export { PhysicsEngine } from './managers/PhysicsEngine';
 export type { PhysicsConfig } from './managers/PhysicsEngine';
 export { GraphManager } from './managers/GraphManager';
+export { LayerDetailManager } from './managers/LayerDetailManager';
+export type { LayerMetadata, LayerDetailConfig } from './managers/LayerDetailManager';
 export { validateCompositeSize, validateCompositeHierarchy } from './utils/validation';
 
 // Create a convenience class for quick initialization
@@ -17,6 +19,7 @@ import { GraphManager } from './managers/GraphManager';
 import { Entity } from './core/Entity';
 import { Connection } from './core/Connection';
 import type { PhysicsConfig } from './managers/PhysicsEngine';
+import type { LayerDetailConfig } from './managers/LayerDetailManager';
 import { validateCompositeHierarchy } from './utils/validation';
 
 export class Zoomies {
@@ -29,6 +32,7 @@ export class Zoomies {
         options: {
             enablePhysics?: boolean;
             physicsConfig?: PhysicsConfig;
+            layerDetailConfig?: LayerDetailConfig;
         } = {}
     ) {
         const canvas = document.querySelector(selector) as HTMLCanvasElement;
@@ -36,7 +40,7 @@ export class Zoomies {
             throw new Error(`Canvas element not found: ${selector}`);
         }
 
-        this.manager = new GraphManager(canvas, options.physicsConfig);
+        this.manager = new GraphManager(canvas, options.physicsConfig, options.layerDetailConfig);
         
         // Normalize single entity (legacy) to array
         const entityList = Array.isArray(entities) ? entities : [entities];

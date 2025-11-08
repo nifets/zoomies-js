@@ -122,6 +122,75 @@ new LayerDetailManager({
 - `zoomWindowSize = log₂(layerScaleFactor) × 3` → visible layer span (e.g., ≈ 4.755)
 - These adapt dynamically when layerScaleFactor changes
 
+#### Layer Metadata: Per-Layer Customisation
+
+Customize appearance and scaling on a per-layer basis via `LayerMetadata`:
+
+```typescript
+interface LayerMetadata {
+    entityShape?: 'circle' | 'rectangle';  // override entity shape for this layer
+    entityColour?: string;                  // override entity colour for this layer
+    edgeColour?: string;                    // override edge colour for this layer
+    relativeScale?: number;                 // scale relative to previous layer
+}
+```
+
+Pass metadata via `LayerDetailConfig`:
+
+```typescript
+const layerMetadata = new Map();
+layerMetadata.set(0, {
+    entityShape: 'circle',
+    entityColour: '#3498db',
+    edgeColour: '#17a2b8',
+    relativeScale: 2              // layer 0 nodes are 2x layer 1 nodes
+});
+layerMetadata.set(1, {
+    entityShape: 'rectangle',
+    entityColour: '#2ecc71',
+    edgeColour: '#e67e22',
+    relativeScale: 2.5            // layer 1 nodes are 2.5x layer 2 nodes
+});
+
+const zoomies = new Zoomies('#canvas', entities, connections, {
+    layerDetailConfig: {
+        layerScaleFactor: 3,
+        layerMetadata: layerMetadata
+    }
+});
+```
+
+**Resolution Priority (highest to lowest):**
+
+1. Entity-level attributes (`entity.shape`, `entity.colour`)
+2. Layer metadata from `LayerDetailManager`
+3. Defaults (circle, #3498db, #95a5a6)
+
+Entity-level attributes always override layer metadata, allowing mixed styling within a layer.
+
+#### Per-Layer Scaling
+
+`relativeScale` defines cumulative scaling from layer 0 to layer N:
+
+- If all layers have `relativeScale: 2`, then `radius(layer=n) = relativeRadius × 2^n`
+- If layers have different scales, they're multiplied: `radius(layer=n) = relativeRadius × scale[0] × scale[1] × ... × scale[n]`
+- `getNodeRadiusAtLayer()` computes this automatically from metadata
+
+#### Shape Encapsulation
+
+Shape information is encapsulated in the `Shape` class hierarchy:
+
+- `Shape.getType()` - Get shape identifier ('circle', 'rectangle')
+- `ShapeFactory.createShape()` - Factory method to instantiate shapes (single point to add new shape types)
+- Entity.updateShapeObject() - Updates internal shape geometry when layer metadata overrides shape type
+- Renderer calls `updateShapeObject()` before rendering if shape differs from current
+
+This design ensures:
+
+- New shape types require changes only in `Shape` class and `ShapeFactory`, not scattered throughout code
+- Geometry calculations always use correct shape (no stale shapeObject)
+- Entity doesn't duplicate shape information
+
 ### 3. PhysicsEngine (`src/managers/PhysicsEngine.ts`)
 
 **Force-directed layout with layer-based simulation.**

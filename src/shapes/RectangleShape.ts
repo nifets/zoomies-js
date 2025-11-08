@@ -9,6 +9,10 @@ export class RectangleShape extends Shape {
         super();
     }
 
+    getType(): string {
+        return 'rectangle';
+    }
+
     getRandomInteriorPoint(centerX: number, centerY: number): { x: number; y: number } {
         const hw = this.width / 2;
         const hh = this.height / 2;
