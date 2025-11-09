@@ -4,6 +4,13 @@
 
 ---
 
+## src/config.ts
+
+**Exports:**
+- const CONFIG
+
+---
+
 ## src/core/Connection.ts
 
 **Exports:**
@@ -16,7 +23,7 @@
 - public setOpacity(): void
 - public highlight(): void
 - public unhighlight(): void
-- public toJSON(): Record
+- public toJSON(): Record<string, any>
 
 ---
 
@@ -27,12 +34,12 @@
 
 **Methods:**
 - public setPosition(): void
-- public updateShapeObject(): void
-- public getResolvedShapeType(): string
+- public recreateShapeAtScale(): void
+- public updateShapeType(): void
 - public isComposite(): boolean
-- public getAllChildren(): Entity
-- public getVisibleChildren(): Entity
-- public getLeafEntities(): Entity
+- public getAllChildren(): Entity[]
+- public getVisibleChildren(): Entity[]
+- public getLeafEntities(): Entity[]
 - public collapse(): void
 - public expand(): void
 - public updateSummaryEdges(): void
@@ -86,16 +93,16 @@
 **Methods:**
 - public buildGraph(): void
 - private connectionTouchesEntity(): boolean
-- private generateSyntheticEdges(): Connection
-- private findEdgesBetweenChildren(): Connection
+- private generateSyntheticEdges(): Connection[]
+- private findEdgesBetweenChildren(): Connection[]
 - private mergeConnections(): void
 - public setRoot(): void
-- private getAllEntities(): Entity
-- private getAllConnections(): Connection
-- private getAllComposites(): Entity
-- public getVisibleNodes(): Entity
-- public getVisibleConnections(): Connection
-- private findCompositeForEntity(): Entity
+- private getAllEntities(): Entity[]
+- private getAllConnections(): Connection[]
+- private getAllComposites(): Entity[]
+- public getVisibleNodes(): Entity[]
+- public getVisibleConnections(): Connection[]
+- private findCompositeForEntity(): Entity | null
 - public enablePhysics(): void
 - private updatePhysicsForVisibleLayers(): void
 - public disablePhysics(): void
@@ -149,15 +156,15 @@
 - public buildScaleBar(): void
 - public getOptimalZoomForLayer(): number
 - public getPrimaryLayerAtZoom(): number
-- public getVisibleLayers(): number
-- public getVisibleEntities(): Entity
+- public getVisibleLayers(): number[]
+- public getVisibleEntities(): Entity[]
 - public getDetailStateAtZoom(): DetailState
 - public getNodeRadiusAtLayer(): number
 - public getLayerEntityShape(): string
 - public getLayerEntityColour(): string
 - public getLayerEdgeColour(): string
 - private getLayerScale(): number
-- public getLayersInHierarchy(): number
+- public getLayersInHierarchy(): number[]
 
 ---
 
@@ -195,7 +202,7 @@
 **Methods:**
 - public getOptimalZoomForLayer(): number
 - public getPrimaryLayerAtZoom(): number
-- public getVisibleLayers(): number
+- public getVisibleLayers(): number[]
 - public getDistanceFromOptimal(): number
 - public isLayerVisible(): boolean
 - public getNormalisedFadeParameter(): number
@@ -224,12 +231,15 @@
 - private updateWorldTransform(): void
 - private getChildNodeOpacity(): number
 - public drawNode(): void
+- private getEdgeConnectionPoint(): { x: number
 - public drawConnection(): void
 - public updatePositions(): void
 - public updateConnections(): void
 - public clear(): void
 - public render(): void
 - public setCamera(): void
+- public getDimensions(): { width: number
+- public destroy(): void
 
 ---
 
@@ -240,8 +250,13 @@
 
 **Methods:**
 - public getType(): string
+- public getDiameter(): number
+- public getRandomInteriorPoint(): { x: number
+- public getBorderPoint(): { x: number
 - public isInside(): boolean
 - public containsPoint(): boolean
+- public draw(): void
+- public drawStroke(): void
 
 ---
 
@@ -252,8 +267,16 @@
 
 **Methods:**
 - public getType(): string
+- public getCornerRadius(): number
+- public getWidth(): number
+- public getHeight(): number
+- public getDiameter(): number
+- public getRandomInteriorPoint(): { x: number
+- public getBorderPoint(): { x: number
 - public isInside(): boolean
 - public containsPoint(): boolean
+- public draw(): void
+- public drawStroke(): void
 
 ---
 
@@ -261,6 +284,12 @@
 
 **Exports:**
 - abstract class Shape
+
+**Methods:**
+- abstract public getDiameter(): number
+- abstract public draw(): void
+- abstract public drawStroke(): void
+- abstract public getRandomInteriorPoint(): { x: number
 
 ---
 

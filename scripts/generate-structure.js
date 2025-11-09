@@ -84,7 +84,7 @@ function extractMethods(filePath) {
     
     for (const line of lines) {
         // Track class definition
-        if (line.match(/^(export\s+)?class\s+\w+/)) {
+        if (line.match(/^(export\s+)?(abstract\s+)?class\s+\w+/)) {
             insideClass = true;
             braceDepth = 0;
         }
@@ -95,17 +95,19 @@ function extractMethods(filePath) {
         braceDepth += openBraces - closeBraces;
         
         if (insideClass && braceDepth > 0) {
-            // Match public/private methods
-            const methodMatch = line.match(/^\s+(private\s+|public\s+)?(\w+)\s*\([^)]*\)\s*:\s*(\w+|void)/);
+            // Match public/private/abstract/static methods
+            const methodMatch = line.match(/^\s+(abstract\s+)?(static\s+)?(private\s+|public\s+)?(\w+)\s*\([^)]*\)\s*:\s*(.+?)(;|\{)/);
             if (methodMatch) {
-                const visibility = methodMatch[1] ? methodMatch[1].trim() : 'public';
-                const name = methodMatch[2];
-                const returnType = methodMatch[3];
+                const isAbstract = methodMatch[1] ? 'abstract ' : '';
+                const isStatic = methodMatch[2] ? 'static ' : '';
+                const visibility = methodMatch[3] ? methodMatch[3].trim() : 'public';
+                const name = methodMatch[4];
+                const returnType = methodMatch[5].trim();
                 
                 // Skip constructor
                 if (name === 'constructor') continue;
                 
-                methods.push(`${visibility} ${name}(): ${returnType}`);
+                methods.push(`${isAbstract}${isStatic}${visibility} ${name}(): ${returnType}`);
             }
         }
         
