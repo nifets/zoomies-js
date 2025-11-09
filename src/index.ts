@@ -33,6 +33,7 @@ export class Zoomies {
             enablePhysics?: boolean;
             physicsConfig?: PhysicsConfig;
             layerDetailConfig?: LayerDetailConfig;
+            renderConfig?: Record<string, any>;
         } = {}
     ) {
         const canvas = document.querySelector(selector) as HTMLCanvasElement;
@@ -51,7 +52,7 @@ export class Zoomies {
         });
     }
 
-    private async init(entities: Entity[], connections: Connection[], options: { enablePhysics?: boolean }): Promise<void> {
+    private async init(entities: Entity[], connections: Connection[], options: { enablePhysics?: boolean; renderConfig?: Record<string, any> }): Promise<void> {
         console.log('[Zoomies] Starting initialization...');
         
         // Validate composite hierarchy
@@ -60,6 +61,12 @@ export class Zoomies {
         }
         
         await this.manager.init();
+        
+        // Apply render config if provided
+        if (options.renderConfig) {
+            this.manager.setRenderConfig(options.renderConfig);
+        }
+        
         console.log('[Zoomies] Manager initialized');
 
         // Build graph from flat lists
@@ -106,6 +113,10 @@ export class Zoomies {
 
     toggleZoomDebug(): void {
         this.manager.toggleZoomDebug();
+    }
+
+    showZoomDebug(): void {
+        this.manager.showZoomDebug();
     }
 
     destroy(): void {

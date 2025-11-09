@@ -2,19 +2,21 @@
  * Debug widget showing zoom level scale bar with explicit layer optimal positions.
  * Visualises the scale bar metaphor: each layer has an optimal viewing position,
  * spaced by log₂(relativeScale) zoom units.
+ *
+ * Uses the ScaleBar from LayerDetailManager to avoid duplication.
  */
+import { LayerDetailManager } from '../managers/LayerDetailManager';
+
 export class ZoomDebugWidget {
     container: HTMLElement;
     scaleCanvas: HTMLCanvasElement;
     zoomLabel: HTMLElement;
     layerLabel: HTMLElement;
     scaleBarLabel: HTMLElement;
-    layerScaleFactor: number;
-    scaleBar: Map<number, number>; // layer → optimal zoom position
+    layerDetailManager: LayerDetailManager;
 
-    constructor(layerScaleFactor: number = 5) {
-        this.layerScaleFactor = layerScaleFactor;
-        this.scaleBar = new Map();
+    constructor(layerDetailManager: LayerDetailManager) {
+        this.layerDetailManager = layerDetailManager;
         this.container = document.createElement('div');
         this.container.id = 'zoom-debug-widget';
         this.container.style.cssText = `
@@ -48,7 +50,6 @@ export class ZoomDebugWidget {
         // Scale bar info
         this.scaleBarLabel = document.createElement('div');
         this.scaleBarLabel.style.cssText = 'margin-bottom: 10px; font-size: 10px; opacity: 0.7;';
-        this.scaleBarLabel.textContent = 'Scale Bar: Building...';
         this.container.appendChild(this.scaleBarLabel);
 
         // Canvas for scale visualization
@@ -67,40 +68,13 @@ export class ZoomDebugWidget {
     }
 
     /**
-     * Build the scale bar from layer metadata.
-     * Each layer has an optimal zoom position separated by log₂(relativeScale) units.
-     */
-    buildScaleBar(minLayer: number, maxLayer: number, layerScaleFactor: number): void {
-        this.scaleBar.clear();
-        this.layerScaleFactor = layerScaleFactor;
-        
-        let currentZoom = 0; // L0 at zoom = 0 (most zoomed in)
-        this.scaleBar.set(0, currentZoom);
-        
-        // Zoom coordinates: positive=zoomed in, negative=zoomed out
-        // Scale bar: L0→L1→L2 increases abstraction (zooming out)
-        // Therefore: higher layers have lower (more negative) zoom values
-        for (let layer = 1; layer <= maxLayer; layer++) {
-            currentZoom -= Math.log2(layerScaleFactor); // Subtract: zoom out for higher layers
-            this.scaleBar.set(layer, currentZoom);
-        }
-        
-        // Update scale bar info label
-        const spacing = Math.log2(layerScaleFactor).toFixed(2);
-        this.scaleBarLabel.textContent = `Scale Bar: L0→L1 spacing = ${spacing} zoom units`;
-    }
-
-    /**
      * Update widget with current zoom state and layer info.
      */
-    update(zoomLevel: number, currentLayer: number, opacity: number, minZoom: number, maxZoom: number, layerScaleFactor: number): void {
-        // Build scale bar if not yet built or if scale factor changed
-        if (this.scaleBar.size === 0 || this.layerScaleFactor !== layerScaleFactor) {
-            const maxLayer = Math.ceil((maxZoom - minZoom) / Math.log2(layerScaleFactor)) + 2;
-            this.buildScaleBar(0, maxLayer, layerScaleFactor);
-        }
-        
-        const optimalZoom = this.scaleBar.get(currentLayer) ?? 0;
+    update(zoomLevel: number, currentLayer: number, opacity: number, minZoom: number, maxZoom: number): void {
+        const scaleBar = this.layerDetailManager.scaleBar;
+        if (!scaleBar) return;
+
+        const optimalZoom = scaleBar.getOptimalZoomForLayer(currentLayer);
         const distanceFromOptimal = (zoomLevel - optimalZoom).toFixed(2);
         
         // Calculate cumulative scale factor: zoom level determines how much things are scaled
@@ -113,14 +87,14 @@ export class ZoomDebugWidget {
         this.zoomLabel.textContent = `Zoom: ${zoomLevel.toFixed(2)} (L${currentLayer}-optimal: ${optimalZoom.toFixed(2)})`;
         this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Distance: ${distanceFromOptimal} | Scale: ×${scaleLabel}`;
 
-        this.drawScale(zoomLevel, minZoom, maxZoom, currentLayer);
+        this.drawScale(zoomLevel, minZoom, maxZoom, currentLayer, scaleBar);
     }
 
     /**
-     * Draw zoom scale bar with explicit layer optimal positions.
+     * Draw zoom scale bar using ScaleBar from LayerDetailManager.
      * Each layer marker shows the optimal zoom position from the scale bar.
      */
-    private drawScale(zoomLevel: number, minZoom: number, maxZoom: number, currentLayer: number): void {
+    private drawScale(zoomLevel: number, minZoom: number, maxZoom: number, currentLayer: number, scaleBar: any): void {
         const ctx = this.scaleCanvas.getContext('2d')!;
         const width = this.scaleCanvas.width;
         const height = this.scaleCanvas.height;
@@ -171,13 +145,10 @@ export class ZoomDebugWidget {
         ctx.font = '9px monospace';
         ctx.textAlign = 'center';
         
-        for (const [layer, optimalZoom] of this.scaleBar.entries()) {
+        for (const [layer, optimalZoom] of scaleBar.layerPositions.entries()) {
             if (optimalZoom >= minZoom && optimalZoom <= maxZoom) {
                 const layerPos = padding + ((maxZoom - optimalZoom) / zoomRange) * scaleRange;
 
-                // Calculate cumulative scale factor (×3, ×6, ×12, etc.)
-                const cumulativeScale = Math.pow(this.layerScaleFactor, layer);
-                
                 // Highlight current layer's optimal position
                 const isCurrentLayer = layer === currentLayer;
                 const tickHeight = isCurrentLayer ? 8 : 4;
@@ -192,10 +163,10 @@ export class ZoomDebugWidget {
                 ctx.lineTo(layerPos, scaleBottom + tickHeight);
                 ctx.stroke();
 
-                // Layer label with scale
+                // Layer label
                 ctx.fillStyle = tickColor;
                 ctx.font = '8px monospace';
-                const scaleLabel = layer === 0 ? `L${layer}` : `L${layer} ×${cumulativeScale.toFixed(0)}`;
+                const scaleLabel = `L${layer}`;
                 ctx.fillText(scaleLabel, layerPos, scaleBottom + 16);
                 ctx.font = '9px monospace';
                 
@@ -209,8 +180,8 @@ export class ZoomDebugWidget {
         }
 
         // Draw fade regions around current layer optimal position
-        const fadeDistance = Math.log2(this.layerScaleFactor) * 0.5; // Half the layer spacing
-        const currentOptimal = this.scaleBar.get(currentLayer) ?? zoomLevel;
+        const fadeDistance = scaleBar.fadeDistance;
+        const currentOptimal = scaleBar.getOptimalZoomForLayer(currentLayer);
         
         const fadeLeftZoom = currentOptimal - fadeDistance;
         const fadeRightZoom = currentOptimal + fadeDistance;

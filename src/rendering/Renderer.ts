@@ -11,6 +11,7 @@ export class Renderer {
     nodeGraphics: Map<Entity, Graphics>;
     connectionGraphics: Map<Connection, Graphics>;
     nodeLabels: Map<Entity, Text>;
+    edgeLabels: Map<Connection, Text>;
     worldContainer: Container;
     connectionContainer: Container;
     nodeContainer: Container;
@@ -20,6 +21,7 @@ export class Renderer {
     offsetY: number;
     zoomManager: ZoomManager | null;
     layerDetailManager: LayerDetailManager | null;
+    renderConfig: Record<string, any>;
     private resizeHandler: (() => void) | null;
 
     // Zoom-based visibility thresholds
@@ -36,6 +38,7 @@ export class Renderer {
         this.nodeGraphics = new Map();
         this.connectionGraphics = new Map();
         this.nodeLabels = new Map();
+        this.edgeLabels = new Map();
         this.worldContainer = new Container();
         this.connectionContainer = new Container();
         this.nodeContainer = new Container();
@@ -46,6 +49,7 @@ export class Renderer {
         this.scale = 1;
         this.offsetX = rect.width / 2;
         this.offsetY = rect.height / 2;
+        this.renderConfig = { showEdgeLabels: true };
     }
     
     async init(): Promise<void> {
@@ -58,7 +62,14 @@ export class Renderer {
             antialias: true,
             autoDensity: true,
             resolution: window.devicePixelRatio || 1,
-            backgroundColor: 0xffffff
+            backgroundColor: 0xffffff,
+            // WebGPU context with limits for large scenes
+            context: {
+                requiredLimits: {
+                    maxTextureDimension2D: 8192,
+                    maxBufferSize: 268435456
+                }
+            }
         });
         console.log('[Renderer] PixiJS app initialized');
         this.app.stage.addChild(this.worldContainer);
@@ -205,7 +216,6 @@ export class Renderer {
         const opacity = detailState ? detailState.opacity : 1;
         graphics.alpha = connection.alpha * opacity;
         
-        
         // Connection-level colour takes precedence over layer metadata
         // Only use layer metadata if connection didn't explicitly specify the colour
         let maxLayer = 0;
@@ -317,6 +327,70 @@ export class Renderer {
                 }
             }
         }
+        
+        // Render edge label if configured
+        if (this.renderConfig.showEdgeLabels) {
+            this.drawConnectionLabel(connection, opacity);
+        }
+    }
+
+    /**
+     * Draw a label for a connection at its midpoint.
+     */
+    private drawConnectionLabel(connection: Connection, opacity: number = 1): void {
+        if (connection.sources.length === 0 || connection.targets.length === 0) return;
+        
+        const source = connection.sources[0];
+        const target = connection.targets[0];
+        
+        // Calculate midpoint between source and target
+        const start = this.getEdgeConnectionPoint(source, target);
+        const end = this.getEdgeConnectionPoint(target, source);
+        const midX = (start.x + end.x) / 2;
+        const midY = (start.y + end.y) / 2;
+        
+        // Dynamic resolution based on zoom
+        const targetRes = Math.max(4, this.scale * 4);
+        
+        // Get or create label text
+        let label = this.edgeLabels.get(connection);
+        if (!label) {
+            label = new Text({
+                text: connection.attributes.label || connection.id,
+                style: {
+                    fontFamily: 'Arial, sans-serif',
+                    fontSize: 10,
+                    fill: 0x333333,
+                    align: 'center'
+                },
+                resolution: targetRes
+            });
+            label.anchor.set(0.5, 0.5);
+            this.labelContainer.addChild(label);
+            this.edgeLabels.set(connection, label);
+        } else if (Math.abs(label.resolution - targetRes) > 2) {
+            // Recreate label if resolution changed significantly
+            this.labelContainer.removeChild(label);
+            label.destroy();
+            label = new Text({
+                text: connection.attributes.label || connection.id,
+                style: {
+                    fontFamily: 'Arial, sans-serif',
+                    fontSize: 10,
+                    fill: 0x333333,
+                    align: 'center'
+                },
+                resolution: targetRes
+            });
+            label.anchor.set(0.5, 0.5);
+            this.labelContainer.addChild(label);
+            this.edgeLabels.set(connection, label);
+        }
+        
+        label.text = connection.attributes.label || connection.id;
+        label.x = midX;
+        label.y = midY;
+        label.alpha = connection.alpha * opacity;
     }
 
     updatePositions(nodes: Entity[]): void {
@@ -362,32 +436,60 @@ export class Renderer {
             this.resizeHandler = null;
         }
         
-        // Destroy graphics and labels
-        this.nodeGraphics.forEach(g => g.destroy());
-        this.connectionGraphics.forEach(g => g.destroy());
-        this.nodeLabels.forEach(l => l.destroy());
+        // Clear maps first
         this.nodeGraphics.clear();
         this.connectionGraphics.clear();
         this.nodeLabels.clear();
+        this.edgeLabels.clear();
         
-        // Destroy containers
-        if (this.worldContainer) {
-            this.worldContainer.removeChildren();
-            this.worldContainer.destroy();
+        // Destroy containers (which will destroy all children)
+        try {
+            if (this.worldContainer) {
+                this.worldContainer.removeChildren();
+                this.worldContainer.destroy();
+            }
+        } catch (e) {
+            console.error('Error destroying worldContainer:', e);
         }
-        if (this.connectionContainer) {
-            this.connectionContainer.destroy();
+        
+        try {
+            if (this.connectionContainer) {
+                this.connectionContainer.destroy();
+            }
+        } catch (e) {
+            console.error('Error destroying connectionContainer:', e);
         }
-        if (this.nodeContainer) {
-            this.nodeContainer.destroy();
+        
+        try {
+            if (this.nodeContainer) {
+                this.nodeContainer.destroy();
+            }
+        } catch (e) {
+            console.error('Error destroying nodeContainer:', e);
         }
-        if (this.labelContainer) {
-            this.labelContainer.destroy();
+        
+        try {
+            if (this.labelContainer) {
+                this.labelContainer.destroy();
+            }
+        } catch (e) {
+            console.error('Error destroying labelContainer:', e);
         }
         
         // Destroy the PixiJS app completely to release WebGPU resources
         if (this.app) {
-            this.app.destroy();
+            try {
+                this.app.destroy();
+            } catch (e) {
+                console.error('Error destroying PixiJS app:', e);
+            }
         }
+    }
+
+    /**
+     * Set render configuration.
+     */
+    setRenderConfig(config: Record<string, any>): void {
+        this.renderConfig = { ...this.renderConfig, ...config };
     }
 }

@@ -67,14 +67,14 @@
     <canvas id="graph-canvas"></canvas>
     
     <div id="controls">
-        <div style="margin-bottom: 10px; font-weight: bold;">Test Networks</div>
-        <button class="network-btn active" data-network="flat">1. Flat (5 nodes)</button>
-        <button class="network-btn" data-network="simple">2. Simple Hierarchy</button>
-        <button class="network-btn" data-network="complex">3. Complex Hierarchy</button>
+        <div style="margin-bottom: 10px; font-weight: bold;">Gene Regulation Network</div>
+        <button class="layer-btn active" data-layers="0">Layer 0 Only</button>
+        <button class="layer-btn" data-layers="0,1">Layers 0-1</button>
+        <button class="layer-btn" data-layers="0,1,2">All Layers</button>
         
         <button id="physics-btn" class="active" style="margin-top: 10px; background: #27ae60;">Physics: ON</button>
         
-        <button id="zoom-debug-btn" style="margin-top: 5px; background: #8e44ad;">Zoom Debug: OFF</button>
+        <button id="edge-labels-btn" class="active" style="margin-top: 5px; background: #27ae60;">Edge Labels: ON</button>
         
         <div class="label">
             <div style="margin-top: 10px; font-weight: bold;">Controls</div>
@@ -88,371 +88,186 @@
         import { Zoomies, Entity, Connection } from './src/index.ts';
 
         let currentZoomies = null;
-        let currentNetwork = 'flat';
+        let edgeLabelsEnabled = true;
 
-        // ============================================================================
-        // TEST NETWORK 1: Flat (5 nodes, 4 edges) - no hierarchy
-        // ============================================================================
-        function createFlatNetwork() {
-            const nodeA = new Entity('Node_A', { 
-                layer: 0, 
-                colour: '#3498db', 
-                size: 20,
-            });
-            
-            const nodeB = new Entity('Node_B', { 
-                layer: 0, 
-                colour: '#e74c3c', 
-                size: 20,
-            });
-            
-            const nodeC = new Entity('Node_C', { 
-                layer: 0, 
-                colour: '#2ecc71', 
-                size: 20,
-            });
-            
-            const nodeD = new Entity('Node_D', { 
-                layer: 0, 
-                size: 30,
-            });
-            
-            const nodeE = new Entity('Node_E', { 
-                layer: 0, 
-                colour: '#9b59b6', 
-                shape: 'rectangle',
-                width: 20,
-                height: 100,
-                cornerRadius: 10,
-            });
+        /**
+         * Create gene regulation network with:
+         * - Layer 0: mRNA_A, Protein_A (within each gene)
+         * - Layer 1: Gene A, B, C, D (each containing mRNA + Protein)
+         * - Layer 2: Differentiation (containing Gene A and B)
+         */
+        function createGeneNetwork(maxLayer) {
+            // Helper: create mRNA and Protein pair for a gene
+            function createGenePair(geneName) {
+                const mRNA = new Entity(`mRNA_${geneName}`, { 
+                    layer: 0,
+                    colour: '#3498db',
+                    radius: 200
+                });
+                const protein = new Entity(`Protein_${geneName}`, { 
+                    layer: 0,
+                    colour: '#e74c3c',
+                    radius: 250
+                });
+                return { mRNA, protein };
+            }
 
-            const connAB = new Connection('conn_AB', [nodeA], [nodeB], {
-                colour: '#95a5a6',
-                width: 2
-            });
-            
-            const connAC = new Connection('conn_AC', [nodeA], [nodeC], {
-                colour: '#95a5a6',
-                width: 2
-            });
-            
-            const connBD = new Connection('conn_BD', [nodeB], [nodeD], {
-                colour: '#95a5a6',
-                width: 2
-            });
-            
-            const connCE = new Connection('conn_CE', [nodeC], [nodeE], {
-                colour: '#95a5a6',
-                width: 2
-            });
+            // Layer 0: Create mRNA and Protein for genes A, B, C, D
+            const pairA = createGenePair('A');
+            const pairB = createGenePair('B');
+            const pairC = createGenePair('C');
+            const pairD = createGenePair('D');
 
-            // Per-layer metadata: customize appearance for each layer
-            const layerMetadata = new Map();
-            
-            // Layer 0: Blue circles with teal edges, scale 2x to layer 1
-            layerMetadata.set(0, {
-                entityShape: 'rectangle',
-                entityColour: '#3498db',
-                edgeColour: '#17a2b8',
-                relativeScale: 2
-            });
-
-            return {
-                entities: [nodeA, nodeB, nodeC, nodeD, nodeE],
-                connections: [connAB, connAC, connBD, connCE],
-                layerMetadata: layerMetadata
-            };
-        }
-
-        // ============================================================================
-        // TEST NETWORK 2: Simple Hierarchy (3 composites with children, orphan nodes, cross edges)
-        // ============================================================================
-        function createSimpleHierarchy() {
-            // Composite 1 nodes
-            const node1A = new Entity('Node_1A', { 
-                layer: 0, 
-                colour: '#3498db', 
-            });
-            
-            const node1B = new Entity('Node_1B', { 
-                layer: 0, 
-                colour: '#3498db', 
-            });
-
-            const conn1AB = new Connection('conn_1AB', [node1A], [node1B], {
-                colour: '#95a5a6',
-                width: 2
-            });
-
-            const composite1 = new Entity('Composite_1', {
-                children: [node1A, node1B],
-                layer: 1,
-                colour: '#e8daef',
-                radius: 60,
-            });
-
-            // Composite 2 nodes
-            const node2A = new Entity('Node_2A', { 
-                layer: 0, 
-                colour: '#2ecc71', 
-            });
-            
-            const node2B = new Entity('Node_2B', { 
-                layer: 0, 
-                colour: '#2ecc71', 
-            });
-
-            const conn2AB = new Connection('conn_2AB', [node2A], [node2B], {
-                colour: '#95a5a6',
-                width: 2
-            });
-
-            const composite2 = new Entity('Composite_2', {
-                children: [node2A, node2B],
-                layer: 1,
-                colour: '#d5f4e6',
-                radius: 60,
-            });
-
-            // Composite 3 nodes
-            const node3A = new Entity('Node_3A', { 
-                layer: 0, 
-                colour: '#e74c3c', 
-            });
-            
-            const node3B = new Entity('Node_3B', { 
-                layer: 0, 
-                colour: '#e74c3c', 
-            });
-
-            const conn3AB = new Connection('conn_3AB', [node3A], [node3B], {
-                colour: '#95a5a6',
-                width: 2
-            });
-
-            const composite3 = new Entity('Composite_3', {
-                children: [node3A, node3B],
-                layer: 1,
-                colour: '#fadbd8',
-                radius: 60,
-            });
-
-            // Orphan layer 0 nodes (not in any composite)
-            const orphanX = new Entity('Orphan_X', { 
-                layer: 0, 
-                colour: '#f39c12', 
-            });
-            
-            const orphanY = new Entity('Orphan_Y', { 
-                layer: 0, 
-                colour: '#f39c12', 
-            });
-
-            // Cross-composite connections
-            const conn1A2A = new Connection('conn_1A2A', [node1A], [node2A], {
-                colour: '#e67e22',
-                width: 1
-            });
-
-            const conn1B2B = new Connection('conn_1B2B', [node1B], [node2B], {
-                colour: '#e67e22',
-                width: 1
-            });
-
-            // Connection from composite 2 to composite 3
-            const conn2A3A = new Connection('conn_2A3A', [node2A], [node3A], {
-                colour: '#8e44ad',
-                width: 1
-            });
-
-            // Connections from node1A to orphan nodes
-            const conn1AX = new Connection('conn_1AX', [node1A], [orphanX], {
-                colour: '#16a085',
-                width: 1
-            });
-
-            const conn1AY = new Connection('conn_1AY', [node1A], [orphanY], {
-                colour: '#16a085',
-                width: 1
-            });
-
-            // Connection between orphan nodes
-            const connXY = new Connection('connXY', [orphanX], [orphanY], {
-                colour: '#95a5a6',
-                width: 2
-            });
-
-            return {
-                entities: [composite1, composite2, composite3, node1A, node1B, node2A, node2B, node3A, node3B, orphanX, orphanY],
-                connections: [conn1AB, conn2AB, conn3AB, conn1A2A, conn1B2B, conn2A3A, conn1AX, conn1AY, connXY]
-            };
-        }
-
-        // ============================================================================
-        // TEST NETWORK 3: Complex Hierarchy (3-level hierarchy with layer metadata)
-        // ============================================================================
-        function createComplexHierarchy() {
-            // Level 0: nodes
-            const nodes = {
-                n1: new Entity('N1', { layer: 0, radius: 12 }),
-                n2: new Entity('N2', { layer: 0, radius: 12 }),
-                n3: new Entity('N3', { layer: 0, radius: 12 }),
-                n4: new Entity('N4', { layer: 0, radius: 12 }),
-                n5: new Entity('N5', { layer: 0, radius: 12 }),
-                n6: new Entity('N6', { layer: 0, radius: 12 }),
-            };
-
-            // Level 0: connections
-            const edgesL0 = [
-                new Connection('e_n1n2', [nodes.n1], [nodes.n2], { width: 1 }),
-                new Connection('e_n3n4', [nodes.n3], [nodes.n4], { width: 1 }),
-                new Connection('e_n5n6', [nodes.n5], [nodes.n6], { width: 1 }),
-            ];
-
-            // Level 1: composites of level 0
-            const composite1 = new Entity('Comp1', {
-                children: [nodes.n1, nodes.n2],
-                layer: 1,
-                radius: 45
-            });
-
-            const composite2 = new Entity('Comp2', {
-                children: [nodes.n3, nodes.n4],
-                layer: 1,
-                radius: 45
-            });
-
-            const composite3 = new Entity('Comp3', {
-                children: [nodes.n5, nodes.n6],
-                layer: 1,
-                radius: 45
-            });
-
-            // Level 1: connections between composites
-            const edgesL1 = [
-                new Connection('e_c1c2', [composite1], [composite2], { width: 2 }),
-                new Connection('e_c2c3', [composite2], [composite3], { width: 2 }),
-            ];
-
-            // Level 2: super-composite
-            const superComposite = new Entity('SuperComp', {
-                children: [composite1, composite2, composite3],
-                layer: 2,
-                radius: 150
-            });
-
-            // Per-layer metadata: customize appearance for each layer
-            const layerMetadata = new Map();
-            
-            // Layer 0: Blue circles with teal edges, scale 2x to layer 1
-            layerMetadata.set(0, {
-                entityShape: 'circle',
-                entityColour: '#3498db',
-                edgeColour: '#17a2b8',
-                relativeScale: 2
-            });
-
-            // Layer 1: Green rectangles with orange edges, scale 2.5x to layer 2
-            layerMetadata.set(1, {
-                entityShape: 'rectangle',
-                entityColour: '#2ecc71',
-                edgeColour: '#e67e22',
-                relativeScale: 2.5
-            });
-
-            // Layer 2: Purple circles with magenta edges
-            layerMetadata.set(2, {
-                entityShape: 'circle',
-                entityColour: '#9b59b6',
-                edgeColour: '#e91e63'
-            });
-
-            return {
-                entities: [
-                    superComposite, composite1, composite2, composite3,
-                    nodes.n1, nodes.n2, nodes.n3, nodes.n4, nodes.n5, nodes.n6
-                ],
-                connections: [...edgesL0, ...edgesL1],
-                layerMetadata: layerMetadata
-            };
-        }
-
-        // ============================================================================
-        // TEST NETWORK 4: Layer Metadata Demo
-        // Demonstrates per-layer customisation: custom shapes, colours, and scaling
-        // ============================================================================
-        function createMetadataHierarchy() {
-            // Layer 0: Small blue circles
-            const leaf1 = new Entity('Leaf_1', { layer: 0, radius: 12 });
-            const leaf2 = new Entity('Leaf_2', { layer: 0, radius: 12 });
-            const leaf3 = new Entity('Leaf_3', { layer: 0, radius: 12 });
-            const leaf4 = new Entity('Leaf_4', { layer: 0, radius: 12 });
-
-            // Layer 1: Composite containing leaves
-            const middle1 = new Entity('Mid_1', {
-                children: [leaf1, leaf2],
-                layer: 1,
-                radius: 40
-            });
-
-            const middle2 = new Entity('Mid_2', {
-                children: [leaf3, leaf4],
-                layer: 1,
-                radius: 40
-            });
-
-            // Layer 2: Top-level composite
-            const root = new Entity('Root', {
-                children: [middle1, middle2],
-                layer: 2,
-                radius: 80
-            });
-
+            // Layer 0: Translation connections (mRNA → Protein within each gene)
             const connections = [
-                new Connection('e1', [leaf1], [leaf2], { width: 1 }),
-                new Connection('e2', [leaf3], [leaf4], { width: 1 }),
-                new Connection('e3', [middle1], [middle2], { width: 2 }),
+                new Connection('translation_A', [pairA.mRNA], [pairA.protein], {
+                    colour: '#95a5a6',
+                    width: 1.5
+                }),
+                new Connection('translation_B', [pairB.mRNA], [pairB.protein], {
+                    colour: '#95a5a6',
+                    width: 1.5
+                }),
+                new Connection('translation_C', [pairC.mRNA], [pairC.protein], {
+                    colour: '#95a5a6',
+                    width: 1.5
+                }),
+                new Connection('translation_D', [pairD.mRNA], [pairD.protein], {
+                    colour: '#95a5a6',
+                    width: 1.5
+                }),
+                // Inhibition: Protein B inhibits mRNA A
+                new Connection('inhibition_B_to_A', [pairB.protein], [pairA.mRNA], {
+                    colour: '#e74c3c',
+                    width: 2
+                }),
+                // Inhibition: Protein A inhibits mRNA B
+                new Connection('inhibition_A_to_B', [pairA.protein], [pairB.mRNA], {
+                    colour: '#e74c3c',
+                    width: 2
+                }),
+                // Protein B activates mRNA D
+                new Connection('activation_B_to_D', [pairB.protein], [pairD.mRNA], {
+                    colour: '#2ecc71',
+                    width: 2
+                }),
+                // Protein A activates mRNA C
+                new Connection('activation_A_to_C', [pairA.protein], [pairC.mRNA], {
+                    colour: '#2ecc71',
+                    width: 2
+                })
             ];
 
-            // Per-layer metadata: customize shape, colour, and edge colour for each layer
+            // Entities at layer 0
+            const layer0Entities = [
+                pairA.mRNA, pairA.protein,
+                pairB.mRNA, pairB.protein,
+                pairC.mRNA, pairC.protein,
+                pairD.mRNA, pairD.protein
+            ];
+
+            let layer1Entities = [];
+            let layer2Entities = [];
+            let allEntities = layer0Entities;
+
+            // Layer 1: Gene entities (only if maxLayer >= 1)
+            if (maxLayer >= 1) {
+                const geneA = new Entity('Gene_A', {
+                    children: [pairA.mRNA, pairA.protein],
+                    layer: 1,
+                    colour: '#d5f4e6',
+                    width: 150,
+                    height: 120,
+                    cornerRadius: 30,
+                    shape: 'rectangle'
+                });
+
+                const geneB = new Entity('Gene_B', {
+                    children: [pairB.mRNA, pairB.protein],
+                    layer: 1,
+                    colour: '#d5f4e6',
+                    width: 150,
+                    height: 120,
+                    cornerRadius: 30,
+                    shape: 'rectangle'
+                });
+
+                const geneC = new Entity('Gene_C', {
+                    children: [pairC.mRNA, pairC.protein],
+                    layer: 1,
+                    colour: '#d5f4e6',
+                    width: 120,
+                    height: 90,
+                    cornerRadius: 20,
+                    shape: 'rectangle'
+                });
+
+                const geneD = new Entity('Gene_D', {
+                    children: [pairD.mRNA, pairD.protein],
+                    layer: 1,
+                    colour: '#d5f4e6',
+                    width: 120,
+                    height: 90,
+                    cornerRadius: 20,
+                    shape: 'rectangle'
+                });
+
+                layer1Entities = [geneA, geneB, geneC, geneD];
+                allEntities = layer0Entities.concat(layer1Entities);
+
+                // Layer 2: Differentiation entity (only if maxLayer >= 2)
+                if (maxLayer >= 2) {
+                    const differentiation = new Entity('Differentiation', {
+                        children: [geneA, geneB],
+                        layer: 2,
+                        colour: '#fadbd8',
+                        shape: 'rectangle',
+                        radius: 100
+                    });
+
+                    layer2Entities = [differentiation];
+                    allEntities = layer0Entities.concat(layer1Entities).concat(layer2Entities);
+                }
+            }
+
+            // Per-layer metadata for visualization
             const layerMetadata = new Map();
             
-            // Layer 0: Blue circles with teal edges
             layerMetadata.set(0, {
                 entityShape: 'circle',
                 entityColour: '#3498db',
                 edgeColour: '#17a2b8',
-                relativeScale: 2  // Scale to next layer: 2x
+                relativeScale: 5
             });
 
-            // Layer 1: Green rectangles with orange edges
-            layerMetadata.set(1, {
-                entityShape: 'rectangle',
-                entityColour: '#2ecc71',
-                edgeColour: '#e67e22',
-                relativeScale: 2.5  // Scale to next layer: 2.5x
-            });
+            if (maxLayer >= 1) {
+                layerMetadata.set(1, {
+                    entityShape: 'circle',
+                    entityColour: '#2ecc71',
+                    edgeColour: '#e67e22',
+                    relativeScale: 3
+                });
+            }
 
-            // Layer 2: Purple circles with magenta edges
-            layerMetadata.set(2, {
-                entityShape: 'circle',
-                entityColour: '#9b59b6',
-                edgeColour: '#e91e63'
-            });
+            if (maxLayer >= 2) {
+                layerMetadata.set(2, {
+                    entityShape: 'circle',
+                    entityColour: '#9b59b6',
+                    edgeColour: '#e91e63'
+                });
+            }
 
             return {
-                entities: [root, middle1, middle2, leaf1, leaf2, leaf3, leaf4],
+                entities: allEntities,
                 connections: connections,
                 layerMetadata: layerMetadata
             };
         }
 
-        // Initialize network
-        // ============================================================================
-        function initializeNetwork(networkName) {
+        // Initialize network with given max layer
+        function initializeNetwork(maxLayer) {
             if (currentZoomies) {
                 currentZoomies.destroy();
-                // Replace the canvas to remove all old event listeners
                 const oldCanvas = document.getElementById('graph-canvas');
                 const newCanvas = document.createElement('canvas');
                 newCanvas.id = 'graph-canvas';
@@ -460,53 +275,50 @@
                 oldCanvas.replaceWith(newCanvas);
             }
 
-            let network;
-            if (networkName === 'flat') {
-                network = createFlatNetwork();
-            } else if (networkName === 'simple') {
-                network = createSimpleHierarchy();
-            } else {
-                network = createComplexHierarchy();
-            }
-
-            currentNetwork = networkName;
+            const network = createGeneNetwork(maxLayer);
             
-            // Create Zoomies with flat lists and optional layer metadata
             const options = {
-                enablePhysics: true
-            };
-            
-            // If network has layer metadata, pass it via layerDetailConfig
-            if (network.layerMetadata) {
-                options.layerDetailConfig = {
+                enablePhysics: true,
+                layerDetailConfig: {
                     layerScaleFactor: 3,
                     layerMetadata: network.layerMetadata
-                };
-            }
+                },
+                renderConfig: {
+                    showEdgeLabels: edgeLabelsEnabled
+                }
+            };
             
             currentZoomies = new Zoomies('#graph-canvas', network.entities, network.connections, options);
 
+            // Show debug widget
+            currentZoomies.showZoomDebug();
+
             // Update button states
-            document.querySelectorAll('.network-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.network === networkName);
+            document.querySelectorAll('.layer-btn').forEach(btn => {
+                const layers = btn.dataset.layers;
+                const maxLayer = Math.max(...layers.split(',').map(Number));
+                btn.classList.toggle('active', maxLayer === maxLayer);
             });
 
-            console.log(`[Demo] Loaded network: ${networkName}`);
+            console.log(`[Demo] Loaded network with max layer: ${maxLayer}`);
             console.log(`[Demo] Entities: ${network.entities.length}, Connections: ${network.connections.length}`);
-            if (network.layerMetadata) {
-                console.log(`[Demo] Layer metadata configured for ${network.layerMetadata.size} layers`);
-            }
         }
 
-        // ============================================================================
-        // Event handlers
-        // ============================================================================
-        document.querySelectorAll('.network-btn').forEach(btn => {
+        // Layer button handlers
+        document.querySelectorAll('.layer-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                initializeNetwork(btn.dataset.network);
+                const layers = btn.dataset.layers.split(',').map(Number);
+                const maxLayer = Math.max(...layers);
+                initializeNetwork(maxLayer);
+                
+                document.querySelectorAll('.layer-btn').forEach(b => {
+                    b.classList.remove('active');
+                });
+                btn.classList.add('active');
             });
         });
 
+        // Physics toggle
         let physicsEnabled = true;
         document.getElementById('physics-btn').addEventListener('click', () => {
             const btn = document.getElementById('physics-btn');
@@ -525,26 +337,27 @@
             }
         });
 
-        let zoomDebugEnabled = false;
-        document.getElementById('zoom-debug-btn').addEventListener('click', () => {
-            const btn = document.getElementById('zoom-debug-btn');
-            if (zoomDebugEnabled) {
-                currentZoomies.toggleZoomDebug();
-                zoomDebugEnabled = false;
-                btn.textContent = 'Zoom Debug: OFF';
-                btn.classList.remove('active');
-                btn.style.background = '#8e44ad';
-            } else {
-                currentZoomies.toggleZoomDebug();
-                zoomDebugEnabled = true;
-                btn.textContent = 'Zoom Debug: ON';
+        // Edge labels toggle
+        document.getElementById('edge-labels-btn').addEventListener('click', () => {
+            const btn = document.getElementById('edge-labels-btn');
+            edgeLabelsEnabled = !edgeLabelsEnabled;
+            if (edgeLabelsEnabled) {
+                btn.textContent = 'Edge Labels: ON';
                 btn.classList.add('active');
-                btn.style.background = '#16a085';
+                btn.style.background = '#27ae60';
+            } else {
+                btn.textContent = 'Edge Labels: OFF';
+                btn.classList.remove('active');
+                btn.style.background = '#e74c3c';
             }
+            // Reinitialize network with new config
+            const layers = document.querySelector('.layer-btn.active').dataset.layers.split(',').map(Number);
+            const maxLayer = Math.max(...layers);
+            initializeNetwork(maxLayer);
         });
 
-        // Initialize with flat network
-        initializeNetwork('flat');
+        // Initialize with layer 0 only
+        initializeNetwork(0);
     </script>
 </body>
 </html>

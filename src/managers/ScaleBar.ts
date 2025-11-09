@@ -118,15 +118,14 @@ export class ScaleBar {
                 visibleLayers.push(layer);
             }
             // At extreme zoom in (distance < 0): keep minLayer visible
-            else if (layer === minLayer && distance < 0) {
+            else if (layer === minLayer && distance > 0) {
                 visibleLayers.push(layer);
             }
             // At extreme zoom out (distance > 0): keep maxLayer visible
-            else if (layer === maxLayer && distance > 0) {
+            else if (layer === maxLayer && distance < 0) {
                 visibleLayers.push(layer);
             }
         }
-
         return visibleLayers.sort((a, b) => a - b);
     }
 

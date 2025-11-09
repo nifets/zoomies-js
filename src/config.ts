@@ -7,7 +7,7 @@ export const CONFIG = {
     // ============ RENDERING ============
     
     // Default node size (radius in pixels at optimal zoom)
-    DEFAULT_NODE_RADIUS: 50,
+    DEFAULT_NODE_RADIUS: 200,
     
     // Detail state styling
     DETAIL_BACKGROUND_OPACITY_TRANSPARENT: 0.15, // At optimal zoom
@@ -16,7 +16,7 @@ export const CONFIG = {
     DETAIL_SHOW_BORDER_THRESHOLD: 0.3,            // Show border when detail > this
     
     // Label font size (base, before layer scaling)
-    LABEL_FONT_SIZE: 12,
+    LABEL_FONT_SIZE: 72,
     
     // ============ ZOOM & SCALE ============
     

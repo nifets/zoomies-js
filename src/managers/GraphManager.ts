@@ -33,6 +33,7 @@ export class GraphManager {
     panStartY: number;
     offsetStartX: number;
     offsetStartY: number;
+    renderConfig: Record<string, any>;
 
     constructor(canvas: HTMLCanvasElement, physicsConfig?: PhysicsConfig, layerDetailConfig?: LayerDetailConfig) {
         this.canvas = canvas;
@@ -57,6 +58,7 @@ export class GraphManager {
         this.panStartY = 0;
         this.offsetStartX = 0;
         this.offsetStartY = 0;
+        this.renderConfig = {};
 
         this.bindInteractions();
     }
@@ -834,20 +836,25 @@ export class GraphManager {
             this.zoomDebugWidget.destroy();
             this.zoomDebugWidget = null;
         } else {
-            this.zoomDebugWidget = new ZoomDebugWidget(this.layerDetailManager.config.layerScaleFactor);
-            
-            // Build scale bar in widget if we have one
-            if (this.layerDetailManager.scaleBar) {
-                const layers = this.layerDetailManager.getLayersInHierarchy(this.entities);
-                if (layers.length > 0) {
-                    this.zoomDebugWidget.buildScaleBar(
-                        Math.min(...layers),
-                        Math.max(...layers),
-                        this.layerDetailManager.config.layerScaleFactor
-                    );
-                }
-            }
+            this.zoomDebugWidget = new ZoomDebugWidget(this.layerDetailManager);
         }
+    }
+
+    /**
+     * Show the zoom debug widget (create if not exists).
+     */
+    showZoomDebug(): void {
+        if (!this.zoomDebugWidget) {
+            this.zoomDebugWidget = new ZoomDebugWidget(this.layerDetailManager);
+        }
+    }
+
+    /**
+     * Set render configuration.
+     */
+    setRenderConfig(config: Record<string, any>): void {
+        this.renderConfig = config;
+        this.renderer.setRenderConfig(config);
     }
 
     /**
@@ -869,8 +876,7 @@ export class GraphManager {
             currentLayer,
             opacity,
             this.zoomManager.minZoom,
-            this.zoomManager.maxZoom,
-            this.layerDetailManager.config.layerScaleFactor
+            this.zoomManager.maxZoom
         );
     }
 }
