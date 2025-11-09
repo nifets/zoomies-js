@@ -54,7 +54,7 @@ export class ZoomDebugWidget {
         // Canvas for scale visualization
         this.scaleCanvas = document.createElement('canvas');
         this.scaleCanvas.width = 300;
-        this.scaleCanvas.height = 80;
+        this.scaleCanvas.height = 100;
         this.scaleCanvas.style.cssText = `
             border: 1px solid #00ff00;
             display: block;
@@ -74,12 +74,14 @@ export class ZoomDebugWidget {
         this.scaleBar.clear();
         this.layerScaleFactor = layerScaleFactor;
         
-        let currentZoom = 0; // L0 at zoom = 0 (arbitrary reference)
+        let currentZoom = 0; // L0 at zoom = 0 (most zoomed in)
         this.scaleBar.set(0, currentZoom);
         
-        // For now, assume uniform scaling (can be extended with per-layer metadata)
+        // Zoom coordinates: positive=zoomed in, negative=zoomed out
+        // Scale bar: L0→L1→L2 increases abstraction (zooming out)
+        // Therefore: higher layers have lower (more negative) zoom values
         for (let layer = 1; layer <= maxLayer; layer++) {
-            currentZoom += Math.log2(layerScaleFactor);
+            currentZoom -= Math.log2(layerScaleFactor); // Subtract: zoom out for higher layers
             this.scaleBar.set(layer, currentZoom);
         }
         
@@ -101,8 +103,15 @@ export class ZoomDebugWidget {
         const optimalZoom = this.scaleBar.get(currentLayer) ?? 0;
         const distanceFromOptimal = (zoomLevel - optimalZoom).toFixed(2);
         
+        // Calculate cumulative scale factor: zoom level determines how much things are scaled
+        // zoom=0 (L0) is base scale (×1)
+        // zoom=-log2(3) (L1) is ×3 scaled
+        // zoom=-log2(6) (L2) is ×6 scaled
+        const cumulativeScale = Math.pow(2, -zoomLevel);
+        const scaleLabel = cumulativeScale.toFixed(1);
+        
         this.zoomLabel.textContent = `Zoom: ${zoomLevel.toFixed(2)} (L${currentLayer}-optimal: ${optimalZoom.toFixed(2)})`;
-        this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Distance: ${distanceFromOptimal}`;
+        this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Distance: ${distanceFromOptimal} | Scale: ×${scaleLabel}`;
 
         this.drawScale(zoomLevel, minZoom, maxZoom, currentLayer);
     }
@@ -141,9 +150,12 @@ export class ZoomDebugWidget {
         ctx.stroke();
 
         // Map zoom to scale position
+        // Scale bar visualization: L0 (zoomed in) on LEFT, L2 (zoomed out) on RIGHT
+        // Zoom coordinates: L0=0 (high), L2=negative (low)
+        // So we need to flip: higher zoom → left, lower zoom → right
         const zoomRange = maxZoom - minZoom;
         const scaleRange = width - 2 * padding;
-        const zoomPos = padding + ((zoomLevel - minZoom) / zoomRange) * scaleRange;
+        const zoomPos = padding + ((maxZoom - zoomLevel) / zoomRange) * scaleRange;
 
         // Draw current zoom indicator (yellow triangle)
         ctx.fillStyle = '#ffff00';
@@ -161,8 +173,11 @@ export class ZoomDebugWidget {
         
         for (const [layer, optimalZoom] of this.scaleBar.entries()) {
             if (optimalZoom >= minZoom && optimalZoom <= maxZoom) {
-                const layerPos = padding + ((optimalZoom - minZoom) / zoomRange) * scaleRange;
+                const layerPos = padding + ((maxZoom - optimalZoom) / zoomRange) * scaleRange;
 
+                // Calculate cumulative scale factor (×3, ×6, ×12, etc.)
+                const cumulativeScale = Math.pow(this.layerScaleFactor, layer);
+                
                 // Highlight current layer's optimal position
                 const isCurrentLayer = layer === currentLayer;
                 const tickHeight = isCurrentLayer ? 8 : 4;
@@ -177,9 +192,12 @@ export class ZoomDebugWidget {
                 ctx.lineTo(layerPos, scaleBottom + tickHeight);
                 ctx.stroke();
 
-                // Layer label
+                // Layer label with scale
                 ctx.fillStyle = tickColor;
-                ctx.fillText(`L${layer}`, layerPos, scaleBottom + 14 + tickHeight);
+                ctx.font = '8px monospace';
+                const scaleLabel = layer === 0 ? `L${layer}` : `L${layer} ×${cumulativeScale.toFixed(0)}`;
+                ctx.fillText(scaleLabel, layerPos, scaleBottom + 16);
+                ctx.font = '9px monospace';
                 
                 // Show optimal zoom value for current layer
                 if (isCurrentLayer) {
@@ -197,8 +215,8 @@ export class ZoomDebugWidget {
         const fadeLeftZoom = currentOptimal - fadeDistance;
         const fadeRightZoom = currentOptimal + fadeDistance;
         
-        const fadeLeftPos = padding + ((Math.max(minZoom, fadeLeftZoom) - minZoom) / zoomRange) * scaleRange;
-        const fadeRightPos = padding + ((Math.min(maxZoom, fadeRightZoom) - minZoom) / zoomRange) * scaleRange;
+        const fadeLeftPos = padding + ((maxZoom - Math.min(maxZoom, fadeRightZoom)) / zoomRange) * scaleRange;
+        const fadeRightPos = padding + ((maxZoom - Math.max(minZoom, fadeLeftZoom)) / zoomRange) * scaleRange;
 
         // Draw fade region (semi-transparent)
         ctx.fillStyle = 'rgba(255, 0, 255, 0.15)';
@@ -209,14 +227,16 @@ export class ZoomDebugWidget {
         ctx.strokeRect(fadeLeftPos, scaleTop - 5, fadeRightPos - fadeLeftPos, scaleHeight + 10);
         ctx.setLineDash([]);
 
-        // Min/Max labels
+        // Min/Max labels (left = zoomed in, right = zoomed out)
+        // minZoom is most negative (zoomed out), maxZoom is most positive (zoomed in)
+        // But we display them: left = high zoom (in), right = low zoom (out)
         ctx.fillStyle = '#00ff00';
         ctx.font = '10px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(`${minZoom.toFixed(1)}`, padding + 2, height - 2);
+        ctx.fillText(`${maxZoom.toFixed(1)} (in)`, padding + 2, height - 2);
 
         ctx.textAlign = 'right';
-        ctx.fillText(`${maxZoom.toFixed(1)}`, width - padding - 2, height - 2);
+        ctx.fillText(`${minZoom.toFixed(1)} (out)`, width - padding - 2, height - 2);
     }
 
     /**

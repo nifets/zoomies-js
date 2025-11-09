@@ -91,48 +91,11 @@ export class ZoomManager {
     }
 
     /**
-     * Get visibility (opacity) for a node at current zoom level.
-     */
-    getNodeVisibility(node: Entity): number {
-        return node.getVisibility(this.zoomLevel);
-    }
-
-    /**
-     * Get all nodes that should be visible at current zoom level.
-     */
-    getVisibleNodes(nodes: Entity[]): Entity[] {
-        return nodes.filter(node => {
-            if (node.implicit) return false;
-            return this.getNodeVisibility(node) > 0.05;
-        });
-    }
-
-    /**
-     * Determine if a composite should expand/collapse based on zoom.
+     * Determine if a composite should auto-expand based on zoom level.
+     * Uses a simple threshold for backwards compatibility.
      */
     shouldAutoExpand(composite: Entity, threshold: number = 0.3): boolean {
-        const vis = this.getNodeVisibility(composite);
-        return vis > threshold;
-    }
-
-    /**
-     * Get composite collapse state (0 = fully expanded with children visible, 1 = fully collapsed).
-     * Used for zoom-based animations of children opacity and composite styling.
-     */
-    getCompositeCollapseState(collapseZoomStart: number = 0.3, collapseZoomEnd: number = 0.1): number {
-        // Clamp zoom level between start and end
-        if (this.zoomLevel > collapseZoomStart) {
-            return 0; // Fully expanded
-        }
-        if (this.zoomLevel < collapseZoomEnd) {
-            return 1; // Fully collapsed
-        }
-        // Interpolate between start and end
-        const range = collapseZoomStart - collapseZoomEnd;
-        return (collapseZoomStart - this.zoomLevel) / range;
-    }
-
-    interpolateOpacity(node: Entity, startAlpha: number, endAlpha: number, t: number): number {
-        return startAlpha + (endAlpha - startAlpha) * t;
+        // Simple heuristic: expand if zoom is high enough
+        return this.zoomLevel > threshold;
     }
 }

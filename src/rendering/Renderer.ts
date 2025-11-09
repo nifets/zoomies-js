@@ -3,6 +3,7 @@ import { Connection } from '../core/Connection';
 import { Application, Graphics, Container, Text } from 'pixi.js';
 import { ZoomManager } from '../managers/ZoomManager';
 import type { DetailState, LayerDetailManager } from '../managers/LayerDetailManager';
+import { CONFIG } from '../config';
 
 export class Renderer {
     canvas: HTMLCanvasElement;
@@ -19,6 +20,7 @@ export class Renderer {
     offsetY: number;
     zoomManager: ZoomManager | null;
     layerDetailManager: LayerDetailManager | null;
+    private resizeHandler: (() => void) | null;
 
     // Zoom-based visibility thresholds
     readonly COMPOSITE_COLLAPSE_ZOOM = 0.3; // Zoom level where children start to hide
@@ -28,6 +30,7 @@ export class Renderer {
         this.canvas = canvas;
         this.zoomManager = zoomManager;
         this.layerDetailManager = layerDetailManager;
+        this.resizeHandler = null;
         const rect = canvas.getBoundingClientRect();
         this.app = new Application();
         this.nodeGraphics = new Map();
@@ -65,30 +68,39 @@ export class Renderer {
         console.log('[Renderer] World transform set, offset:', this.offsetX, this.offsetY);
         
         // Handle window resize
-        window.addEventListener('resize', () => {
+        this.resizeHandler = () => {
+            if (!this.app.renderer) return; // Prevent errors after destroy
             const newRect = this.canvas.getBoundingClientRect();
             this.app.renderer.resize(newRect.width, newRect.height);
             this.offsetX = newRect.width / 2;
             this.offsetY = newRect.height / 2;
             this.updateWorldTransform();
-        });
+        };
+        window.addEventListener('resize', this.resizeHandler);
     }
     
     private updateWorldTransform(): void {
+        if (!this.worldContainer) return; // Guard against destroyed renderer
         this.worldContainer.position.set(this.offsetX, this.offsetY);
         this.worldContainer.scale.set(this.scale, this.scale);
     }
 
     /**
-     * Calculate child node opacity based on parent composite collapse state.
-     * Children fade out as composite collapses.
+     * Calculate child node opacity based on parent composite detail state.
+     * Children fade based on whether parent shows children.
      */
     private getChildNodeOpacity(node: Entity): number {
         if (!node.parent || node.parent.implicit) return 1.0;
         
-        const collapseState = this.zoomManager?.getCompositeCollapseState(this.COMPOSITE_COLLAPSE_ZOOM, this.COMPOSITE_FULLY_COLLAPSED_ZOOM) ?? 0;
-        // Children fade from 1.0 (expanded) to 0.0 (collapsed)
-        return Math.max(0, 1.0 - collapseState);
+        // Use detail state to determine if parent shows children
+        const currentZoom = this.zoomManager?.zoomLevel ?? 0;
+        const parentDetailState = this.layerDetailManager?.getDetailStateAtZoom(node.parent, currentZoom);
+        
+        if (parentDetailState) {
+            return parentDetailState.showChildren ? 1.0 : 0.0;
+        }
+        
+        return 1.0;
     }
 
     drawNode(node: Entity, detailState?: DetailState): void {
@@ -101,60 +113,40 @@ export class Renderer {
             console.log('[Renderer] Created graphics for node:', node.id, 'at', node.x, node.y);
         }
         graphics.clear();
-        graphics.alpha = node.alpha * this.getChildNodeOpacity(node);
+        
+        // Use detail state opacity if provided, otherwise fall back to old method
+        const finalOpacity = detailState ? detailState.opacity * node.alpha : node.alpha * this.getChildNodeOpacity(node);
+        graphics.alpha = finalOpacity;
         
         // Entity-level attributes take precedence over layer metadata
-        // Only use layer metadata if entity didn't explicitly specify the attribute
+        // Entity-level shape takes precedence over layer metadata
         const nodeShape = node.shape ?? this.layerDetailManager?.getLayerEntityShape(node.layer) ?? 'circle';
-        
-        // If shape differs from current shapeObject's type, update it
-        if (node.shapeObject.getType() !== nodeShape) {
-            node.updateShapeObject(nodeShape);
-        }
         
         let nodeColour = node.colour ?? this.layerDetailManager?.getLayerEntityColour(node.layer) ?? '#3498db';
         const colour = parseInt(nodeColour.replace('#', ''), 16);
         
-        if (nodeShape === 'rectangle') {
-            const w = node.width ?? node.radius * 2;
-            const h = node.height ?? node.radius * 2;
-            const cornerRadius = node.attributes.cornerRadius ?? 0;
-            graphics.roundRect(node.x - w / 2, node.y - h / 2, w, h, cornerRadius);
-            graphics.fill({ color: colour });
-            if (node.selected) {
-                graphics.roundRect(node.x - w / 2, node.y - h / 2, w, h, cornerRadius);
-                graphics.stroke({ color: 0xf39c12, width: 3 });
-            } else if (node.attributes.highlighted) {
-                graphics.roundRect(node.x - w / 2, node.y - h / 2, w, h, cornerRadius);
-                graphics.stroke({ color: 0xe74c3c, width: 2 });
-            }
-        } else {
-            const radius = Math.max(3, node.radius);
-            graphics.circle(node.x, node.y, radius);
-            graphics.fill({ color: colour });
-            if (node.selected) {
-                graphics.circle(node.x, node.y, radius);
-                graphics.stroke({ color: 0xf39c12, width: 3 });
-            } else if (node.attributes.highlighted) {
-                graphics.circle(node.x, node.y, radius);
-                graphics.stroke({ color: 0xe74c3c, width: 2 });
-            }
+        // Determine background opacity from detail state
+        const bgOpacity = detailState?.backgroundOpacity ?? 1.0;
+        
+        // Let the shape handle its own rendering
+        node.shapeObject.draw(graphics, node.x, node.y, colour, bgOpacity);
+        
+        // Draw border if detail state says to show it
+        if (detailState?.showBorder ?? true) {
+            node.shapeObject.drawStroke(graphics, node.x, node.y, colour, node.selected, node.highlighted);
         }
 
         // Label handling for both regular nodes and composites
         let label = this.nodeLabels.get(node);
         const targetRes = Math.max(4, this.scale * 4);
         
-        // Scale label font size by layer (same as node size scaling)
-        const layerScaleFactor = node.attributes.layerScaleFactor ?? 5;
-        const layerScale = Math.pow(layerScaleFactor, node.layer);
-        const fontSize = 12 * layerScale;
+        // Font size is managed by entity (same logic as shape sizing)
         
         if (!label) {
             label = new Text({
                 text: node.id,
                 style: {
-                    fontSize: fontSize,
+                    fontSize: node.labelSize,
                     fill: 0x000000,
                     align: 'center',
                     fontFamily: 'Arial, sans-serif'
@@ -170,7 +162,7 @@ export class Renderer {
             label = new Text({
                 text: node.id,
                 style: {
-                    fontSize: fontSize,
+                    fontSize: node.labelSize,
                     fill: 0x000000,
                     align: 'center',
                     fontFamily: 'Arial, sans-serif'
@@ -186,7 +178,8 @@ export class Renderer {
         if (detailState && detailState.labelInside) {
             label.position.set(node.x, node.y);
         } else {
-            label.position.set(node.x, node.y - node.radius - labelOffset);
+            const diameter = node.shapeObject.getDiameter();
+            label.position.set(node.x, node.y - diameter / 2 - labelOffset);
         }
         
         label.visible = true;
@@ -212,6 +205,7 @@ export class Renderer {
         const opacity = detailState ? detailState.opacity : 1;
         graphics.alpha = connection.alpha * opacity;
         
+        
         // Connection-level colour takes precedence over layer metadata
         // Only use layer metadata if connection didn't explicitly specify the colour
         let maxLayer = 0;
@@ -224,10 +218,8 @@ export class Renderer {
         const edgeColourStr = connection.attributes.colour ?? this.layerDetailManager?.getLayerEdgeColour(maxLayer) ?? '#95a5a6';
         const colour = parseInt(edgeColourStr.replace('#', ''), 16);
         
-        // Scale edge width by layer
-        const layerScaleFactor = connection.sources[0]?.attributes.layerScaleFactor ?? 5;
-        const layerScale = Math.pow(layerScaleFactor, maxLayer);
-        const width = (connection.attributes.width ?? 2) * layerScale;
+        // Edge width is not scaled by layer - camera zoom handles all scaling
+        const width = connection.attributes.width ?? 2;
 
         // Check if this is a synthetic edge between composites
         if (connection.attributes.synthetic && connection.subEdges.length > 0) {
@@ -253,10 +245,6 @@ export class Renderer {
             // Draw branching edges from source composite to each source child node
             for (const childNode of sourceNodes) {
                 const childEdgePoint = this.getEdgeConnectionPoint(childNode, target);
-                // Scale by geometric mean between parent and child layer scales
-                const childLayerScale = Math.pow(layerScaleFactor, childNode.layer);
-                const meanScale = Math.sqrt(layerScale * childLayerScale);
-                const branchWidth = (connection.attributes.width ?? 2) * meanScale;
                 
                 // Use child node's opacity for branching edges
                 const currentZoom = this.zoomManager?.zoomLevel ?? 0;
@@ -265,16 +253,12 @@ export class Renderer {
                 
                 graphics.moveTo(sourceCompositeExit.x, sourceCompositeExit.y);
                 graphics.lineTo(childEdgePoint.x, childEdgePoint.y);
-                graphics.stroke({ color: colour, width: branchWidth, alpha: branchAlpha });
+                graphics.stroke({ color: colour, width: width, alpha: branchAlpha });
             }
             
             // Draw branching edges from target composite to each target child node
             for (const childNode of targetNodes) {
                 const childEdgePoint = this.getEdgeConnectionPoint(childNode, source);
-                // Scale by geometric mean between parent and child layer scales
-                const childLayerScale = Math.pow(layerScaleFactor, childNode.layer);
-                const meanScale = Math.sqrt(layerScale * childLayerScale);
-                const branchWidth = (connection.attributes.width ?? 2) * meanScale;
                 
                 // Use child node's opacity for branching edges
                 const currentZoom = this.zoomManager?.zoomLevel ?? 0;
@@ -283,7 +267,7 @@ export class Renderer {
                 
                 graphics.moveTo(targetCompositeEntry.x, targetCompositeEntry.y);
                 graphics.lineTo(childEdgePoint.x, childEdgePoint.y);
-                graphics.stroke({ color: colour, width: branchWidth, alpha: branchAlpha });
+                graphics.stroke({ color: colour, width: width, alpha: branchAlpha });
             }
         } else {
             // Handle many-to-many connections: draw from each source to each target
@@ -303,14 +287,6 @@ export class Renderer {
                         const targetCompositeEntry = this.getEdgeConnectionPoint(targetParent, sourceParent);
                         const targetNodeEdgePoint = this.getEdgeConnectionPoint(target, sourceParent);
                         
-                        // Scale branching widths by geometric mean between parent and child layer scales
-                        const sourceChildLayerScale = Math.pow(layerScaleFactor, source.layer);
-                        const sourceParentLayerScale = Math.pow(layerScaleFactor, sourceParent.layer);
-                        const targetChildLayerScale = Math.pow(layerScaleFactor, target.layer);
-                        const targetParentLayerScale = Math.pow(layerScaleFactor, targetParent.layer);
-                        const sourceBranchWidth = (connection.attributes.width ?? 2) * Math.sqrt(sourceParentLayerScale * sourceChildLayerScale);
-                        const targetBranchWidth = (connection.attributes.width ?? 2) * Math.sqrt(targetParentLayerScale * targetChildLayerScale);
-                        
                         // Get current zoom for detail state
                         const currentZoom = this.zoomManager?.zoomLevel ?? 0;
                         const sourceDetailState = this.layerDetailManager?.getDetailStateAtZoom(source, currentZoom) || { opacity: 1 };
@@ -319,7 +295,7 @@ export class Renderer {
                         // Segment 1: source node → source composite border (use source opacity)
                         graphics.moveTo(sourceNodeEdgePoint.x, sourceNodeEdgePoint.y);
                         graphics.lineTo(sourceCompositeExit.x, sourceCompositeExit.y);
-                        graphics.stroke({ color: colour, width: sourceBranchWidth, alpha: sourceDetailState.opacity * 0.6 });
+                        graphics.stroke({ color: colour, width: width, alpha: sourceDetailState.opacity * 0.6 });
                         
                         // Segment 2: source composite border → target composite border (main edge)
                         graphics.moveTo(sourceCompositeExit.x, sourceCompositeExit.y);
@@ -329,7 +305,7 @@ export class Renderer {
                         // Segment 3: target composite border → target node (use target opacity)
                         graphics.moveTo(targetCompositeEntry.x, targetCompositeEntry.y);
                         graphics.lineTo(targetNodeEdgePoint.x, targetNodeEdgePoint.y);
-                        graphics.stroke({ color: colour, width: targetBranchWidth, alpha: targetDetailState.opacity * 0.6 });
+                        graphics.stroke({ color: colour, width: width, alpha: targetDetailState.opacity * 0.6 });
                     } else {
                         // Regular edge (same composite or no parents)
                         const start = this.getEdgeConnectionPoint(source, target);
@@ -365,6 +341,7 @@ export class Renderer {
     }
 
     setCamera(scale: number, offsetX: number, offsetY: number): void {
+        if (!this.worldContainer) return; // Guard against destroyed renderer
         this.scale = scale;
         this.offsetX = offsetX;
         this.offsetY = offsetY;
@@ -376,5 +353,41 @@ export class Renderer {
             width: this.canvas.width / window.devicePixelRatio, 
             height: this.canvas.height / window.devicePixelRatio 
         };
+    }
+
+    destroy(): void {
+        // Remove resize listener first
+        if (this.resizeHandler) {
+            window.removeEventListener('resize', this.resizeHandler);
+            this.resizeHandler = null;
+        }
+        
+        // Destroy graphics and labels
+        this.nodeGraphics.forEach(g => g.destroy());
+        this.connectionGraphics.forEach(g => g.destroy());
+        this.nodeLabels.forEach(l => l.destroy());
+        this.nodeGraphics.clear();
+        this.connectionGraphics.clear();
+        this.nodeLabels.clear();
+        
+        // Destroy containers
+        if (this.worldContainer) {
+            this.worldContainer.removeChildren();
+            this.worldContainer.destroy();
+        }
+        if (this.connectionContainer) {
+            this.connectionContainer.destroy();
+        }
+        if (this.nodeContainer) {
+            this.nodeContainer.destroy();
+        }
+        if (this.labelContainer) {
+            this.labelContainer.destroy();
+        }
+        
+        // Destroy the PixiJS app completely to release WebGPU resources
+        if (this.app) {
+            this.app.destroy();
+        }
     }
 }

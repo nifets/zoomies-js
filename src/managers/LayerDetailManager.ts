@@ -1,4 +1,6 @@
 import { Entity } from '../core/Entity';
+import { ScaleBar } from './ScaleBar';
+import { CONFIG } from '../config';
 
 /**
  * Per-layer metadata for customisation of entity shape, colour, and scaling.
@@ -15,238 +17,199 @@ export interface LayerMetadata {
  * Configuration for layer detail management.
  */
 export interface LayerDetailConfig {
-    layerScaleFactor?: number;
-    zoomRangeMin?: number;
-    zoomRangeMax?: number;
-    fadeStartRatio?: number;
-    labelInsideThreshold?: number;
-    maxLayerMinOpacity?: number;
-    zoomBuffer?: number;
-    showBorderThreshold?: number;
-    detailedBgOpacity?: number;
-    collapsedBgOpacity?: number;
-    showChildrenThreshold?: number;
+    layerScaleFactor?: number; // Default scale factor for layers without explicit relativeScale
     layerMetadata?: Map<number, LayerMetadata>; // Per-layer customisation
 }
 
 /**
- * Default layer detail configuration.
+ * Detail state for rendering an entity at a specific zoom level.
  */
-const DEFAULT_LAYER_DETAIL_CONFIG: Omit<Required<LayerDetailConfig>, 'layerMetadata'> = {
-    layerScaleFactor: 5,
-    zoomRangeMin: -3,
-    zoomRangeMax: 3,
-    fadeStartRatio: 0.7,
-    labelInsideThreshold: 0.4,
-    maxLayerMinOpacity: 0.3,
-    zoomBuffer: 2,
-    showBorderThreshold: 0.7,
-    detailedBgOpacity: 0.15,
-    collapsedBgOpacity: 1.0,
-    showChildrenThreshold: 0.5,
-};
+export interface DetailState {
+    visible: boolean; // Entity is within visible layer range
+    opacity: number; // 0 to 1, interpolated based on distance from optimal
+    showBorder: boolean; // Draw border (true when detailed)
+    backgroundOpacity: number; // 0.15 (transparent) to 1.0 (opaque)
+    labelInside: boolean; // Label inside node vs above it
+    showChildren: boolean; // Render child entities
+    collapseState: number; // 0 (fully detailed) to 1 (fully collapsed)
+}
 
 /**
- * Manages layer-based detail levels in the visualization.
- * 
+ * Manages layer-based detail levels using explicit scale bar positioning.
+ *
  * Concept:
- * - Each layer has a relative scale (layer 0 = 1x, layer 1 = 5x diameter, etc.)
- * - Zoom level maps to layer-space using logarithmic scaling
- * - A "zoom window" defines how many layers are visible at once
- * - Within the window, opacity and detail interpolate smoothly based on distance from center
- * - Only entities within the visible layer range are simulated/rendered (performance optimization)
- * - Per-layer metadata allows customisation of shape, colour, and scaling per layer
+ * - Each layer has a relative scale and explicit optimal zoom position
+ * - Scale bar is built once from layer metadata (no auto-computation)
+ * - Detail state depends on distance from optimal position (interpolation via smoothstep)
+ * - Visibility, opacity, background, label position, and children rendering all interpolate smoothly
+ * - Only entities within visible layers are simulated/rendered (performance optimization)
  */
 export class LayerDetailManager {
-    config: Required<Omit<LayerDetailConfig, 'layerMetadata'>> & { layerMetadata?: Map<number, LayerMetadata> };
-    minLayer: number;
-    maxLayer: number;
-    layerOffset: number;
+    config: { layerScaleFactor: number };
+    scaleBar: ScaleBar | null;
     layerMetadata: Map<number, LayerMetadata>;
-    
+
     constructor(config: LayerDetailConfig = {}) {
-        // Merge user config with defaults, keeping layerMetadata separate
-        const { layerMetadata, ...configWithoutMetadata } = config;
-        this.config = { ...DEFAULT_LAYER_DETAIL_CONFIG, ...configWithoutMetadata, layerMetadata };
-        
-        // Initialize layer metadata
+        const { layerMetadata, ...rest } = config;
+        this.config = {
+            layerScaleFactor: rest.layerScaleFactor ?? 3
+        };
+
         this.layerMetadata = layerMetadata ?? new Map();
-        
-        this.minLayer = 0;
-        this.maxLayer = 10; // Default, will be updated by setHierarchyLayers()
-        this.layerOffset = 0; // Will be calculated based on zoom range and layer range
-        this.updateLayerOffset();
+        this.scaleBar = null;
     }
 
     /**
-     * Get zoom units per layer (auto-computed from layerScaleFactor).
-     * Zoom uses base 2, so if nodes are layerScaleFactor times larger per layer,
-     * we need log₂(layerScaleFactor) zoom units to traverse one layer.
+     * Build and set the scale bar from layer hierarchy.
+     * Must be called after determining all layers in the graph.
      */
-    private getZoomPerLayer(): number {
-        return Math.log2(this.config.layerScaleFactor);
+    buildScaleBar(minLayer: number, maxLayer: number): void {
+        this.scaleBar = new ScaleBar(minLayer, maxLayer, this.layerMetadata, this.config.layerScaleFactor);
     }
 
     /**
-     * Get the zoom window size (auto-computed from layerScaleFactor).
-     * Window size proportional to layer scale: how many layers visible at once.
-     */
-    private getZoomWindowSize(): number {
-        return Math.log2(this.config.layerScaleFactor) * 3;
-    }
-
-    /**
-     * Calculate layer offset to map zoom range to layer range.
-     * 
-     * Key insight: Camera zoom is base 2, but layers scale at a different rate.
-     * If nodes are layerScaleFactor times larger per layer, then:
-     * - Moving between layers requires changing camera scale by layerScaleFactor
-     * - In zoom-space (base 2): log₂(layerScaleFactor) zoom units per layer
-     * 
-     * Mapping equation (inverted so higher zoom = lower layers):
-     *   layer = layerOffset - (zoomLevel / log₂(layerScaleFactor))
-     * 
-     * We solve for layerOffset so that at zoomRangeMax, layer = minLayer:
-     *   minLayer = layerOffset - (zoomRangeMax / log₂(layerScaleFactor))
-     *   layerOffset = minLayer + (zoomRangeMax / log₂(layerScaleFactor))
-     * 
-     * And verify at zoomRangeMin, layer = maxLayer:
-     *   maxLayer = layerOffset - (zoomRangeMin / log₂(layerScaleFactor))  ✓
-     */
-    private updateLayerOffset(): void {
-        const log2LayerScale = Math.log2(this.config.layerScaleFactor);
-        
-        // Offset ensures that at zoomRangeMax (zoomed in), we see minLayer (detailed)
-        this.layerOffset = this.minLayer + (this.config.zoomRangeMax / log2LayerScale);
-    }
-
-    /**
-     * Set the hierarchy layers so offset can be calculated correctly.
-     * Automatically calculates required zoom range to fit all layers.
-     */
-    setHierarchyLayers(minLayer: number, maxLayer: number): void {
-        this.minLayer = minLayer;
-        this.maxLayer = maxLayer;
-        
-        // Calculate required zoom range to fit all layers
-        // With a buffer on both sides so you can zoom past the extremes
-        const log2LayerScale = Math.log2(this.config.layerScaleFactor);
-        const zoomUnitsNeeded = (maxLayer - minLayer) * log2LayerScale / this.getZoomPerLayer();
-        
-        // Start zoom at 1.0 (fixed)
-        const initialZoom = 1.0;
-        
-        // Calculate min/max based on layer range
-        this.config.zoomRangeMin = initialZoom - (zoomUnitsNeeded / 2) - this.config.zoomBuffer;
-        this.config.zoomRangeMax = initialZoom + (zoomUnitsNeeded / 2) + this.config.zoomBuffer;
-        
-        this.updateLayerOffset();
-    }
-
-    /**
-     * Get the optimal zoom level for a given layer (center of its zoom window).
-     * Higher zoom = lower (more detailed) layers.
-     * Mapping: layer = layerOffset - (zoomLevel / log₂(layerScaleFactor))
-     * Solving for zoomLevel: zoomLevel = (layerOffset - layer) * log₂(layerScaleFactor)
+     * Get the optimal zoom level for a given layer from the scale bar.
      */
     getOptimalZoomForLayer(layer: number): number {
-        const log2LayerScale = Math.log2(this.config.layerScaleFactor);
-        return (this.layerOffset - layer) * log2LayerScale;
+        if (!this.scaleBar) return 0;
+        return this.scaleBar.getOptimalZoomForLayer(layer);
     }
 
     /**
-     * Determine which layer is most prominent at the given zoom level.
-     * Higher zoom = lower layers (more detail).
-     * Mapping: layer = layerOffset - (zoomLevel / log₂(layerScaleFactor))
+     * Determine the primary (closest) layer at given zoom level.
      */
     getPrimaryLayerAtZoom(zoomLevel: number): number {
-        const log2LayerScale = Math.log2(this.config.layerScaleFactor);
-        const layer = this.layerOffset - (zoomLevel / log2LayerScale);
-        return Math.round(layer);
+        if (!this.scaleBar) return 0;
+        return this.scaleBar.getPrimaryLayerAtZoom(zoomLevel);
     }
 
     /**
-     * Get the range of layers that are visible at the given zoom level.
-     * Returns min and max layer indices to process.
-     * Clamped so that maxLayer is always visible (at minimum opacity at window edge).
+     * Get all layers that are at least partially visible at the given zoom level.
      */
-    getVisibleLayerRange(zoomLevel: number): { min: number; max: number } {
-        const centerLayer = this.getPrimaryLayerAtZoom(zoomLevel);
-        const windowRadius = this.getZoomWindowSize() / 2;
-        let min = Math.floor(centerLayer - windowRadius);
-        let max = Math.ceil(centerLayer + windowRadius);
-        
-        // Clamp so maxLayer is always in range (even if barely visible at window edge)
-        if (max < this.maxLayer) {
-            max = this.maxLayer;
-        }
-        
-        return { min, max };
+    getVisibleLayers(zoomLevel: number): number[] {
+        if (!this.scaleBar) return [];
+        return this.scaleBar.getVisibleLayers(zoomLevel);
     }
 
     /**
-     * Filter entities to only those within the visible layer range.
-     * This optimizes performance by only simulating/rendering relevant layers.
+     * Filter entities to only those with visible layers at current zoom.
+     * Performance optimization: only simulate/render visible layers.
      */
     getVisibleEntities(allEntities: Entity[], zoomLevel: number): Entity[] {
-        const range = this.getVisibleLayerRange(zoomLevel);
-        return allEntities.filter(e => e.layer >= range.min && e.layer <= range.max);
+        if (!this.scaleBar) return allEntities;
+        const visibleLayers = this.getVisibleLayers(zoomLevel);
+        const visibleSet = new Set(visibleLayers);
+        return allEntities.filter(e => visibleSet.has(e.layer));
     }
 
     /**
      * Get the detail state for an entity at a given zoom level.
-     * Includes visibility, opacity, rendering style, and detail interpolation.
+     * Computes visibility, opacity, rendering style based on distance from optimal.
+     * Boundary layers (minLayer, maxLayer) never fade out past their optimal.
      */
     getDetailStateAtZoom(entity: Entity, zoomLevel: number): DetailState {
-        const optimalZoom = this.getOptimalZoomForLayer(entity.layer);
-        
-        // Distance from window center in zoom-space
-        const distanceFromCenter = Math.abs(zoomLevel - optimalZoom);
-        
-        // Window radius in zoom-space (layer-space window size converted to zoom-space)
-        const log2LayerScale = Math.log2(this.config.layerScaleFactor);
-        const windowRadiusZoom = (this.getZoomWindowSize() / 2) * log2LayerScale;
-        
-        // Is this entity within the visible window?
-        const isVisible = distanceFromCenter <= windowRadiusZoom;
-        
-        // Opacity: keep full opacity for most of the window, drop sharply at edges
-        // Only fade in the outer (1 - fadeStartRatio) portion of the window distance
-        const fadeStartDistance = windowRadiusZoom * this.config.fadeStartRatio;
-        const normalizedFadeDistance = Math.max(0, Math.min(1, (distanceFromCenter - fadeStartDistance) / (windowRadiusZoom - fadeStartDistance)));
-        
-        // Smoothstep in the fade region: stays high in the main region, drops sharply at edge
-        const smoothstep = 1 - (normalizedFadeDistance * normalizedFadeDistance * (3 - 2 * normalizedFadeDistance));
-        let opacity = Math.max(0, smoothstep);
-        
-        // Ensure maxLayer always has at least minimum opacity (never fully fades out)
-        if (entity.layer === this.maxLayer) {
-            opacity = Math.max(this.config.maxLayerMinOpacity, opacity);
+        if (!this.scaleBar) {
+            return {
+                visible: true,
+                opacity: 1.0,
+                showBorder: true,
+                backgroundOpacity: 0.15,
+                labelInside: false,
+                showChildren: true,
+                collapseState: 0
+            };
         }
-        
-        // Detail level: based on normalized distance from center (independent of opacity fade)
-        // Normalized from 0 (at center) to 1 (at window edge)
-        const normalizedDetailDistance = Math.min(1, distanceFromCenter / windowRadiusZoom);
-        const detailLevel = 1 - normalizedDetailDistance;
-        
+
+        // Get all layers to determine min/max
+        const allLayers = Array.from(this.scaleBar.layerPositions.keys());
+        const minLayer = Math.min(...allLayers);
+        const maxLayer = Math.max(...allLayers);
+
+        // Get distance from optimal
+        const distance = this.scaleBar.getDistanceFromOptimal(entity.layer, zoomLevel);
+        const fadeDistance = this.scaleBar.fadeDistance;
+
+        // Special handling for boundary layers:
+        // - minLayer (L0) never fades when zooming in (negative distance = more zoomed in)
+        // - maxLayer never fades when zooming out (positive distance = more zoomed out)
+        const isMinLayer = entity.layer === minLayer;
+        const isMaxLayer = entity.layer === maxLayer;
+
+        let isVisible: boolean;
+        if (isMinLayer && distance < 0) {
+            // L0 zooming in (more negative): always visible
+            isVisible = true;
+        } else if (isMaxLayer && distance > 0) {
+            // Max layer zooming out (more positive): always visible
+            isVisible = true;
+        } else {
+            // Normal visibility check
+            isVisible = this.scaleBar.isLayerVisible(entity.layer, zoomLevel);
+        }
+
+        if (!isVisible) {
+            return {
+                visible: false,
+                opacity: 0,
+                showBorder: false,
+                backgroundOpacity: 0,
+                labelInside: false,
+                showChildren: false,
+                collapseState: 1
+            };
+        }
+
+        // Normalised fade parameter: 0 = at optimal, 1 = at window edge
+        let fadedParam: number;
+        if (isMinLayer && distance > 0) {
+            // L0 zooming in: no fade, stay at optimal
+            fadedParam = 0;
+        } else if (isMaxLayer && distance < 0) {
+            // Max layer zooming out: no fade, stay at optimal
+            fadedParam = 0;
+        } else {
+            // Normal fade calculation
+            fadedParam = this.scaleBar.getNormalisedFadeParameter(entity.layer, zoomLevel);
+        }
+
+        // Smoothstep for smooth interpolation
+        const smoothstep = fadedParam * fadedParam * (3 - 2 * fadedParam);
+
+        // Opacity: fully visible at optimal, fades out towards edges
+        const opacity = Math.max(0, 1 - smoothstep);
+
+        // Detail level: 1 = fully detailed, 0 = fully collapsed
+        const detailLevel = 1 - smoothstep;
+
+        // Determine rendering state based on position relative to optimal
+        const zoomedOut = distance < -fadeDistance; // Zoomed out from optimal (higher layers visible)
+        const isOptimal = Math.abs(distance) <= fadeDistance; // At optimal
+        const zoomedIn = distance > fadeDistance; // Zoomed in from optimal (lower layers visible)
+
+        // At optimal: transparent background, label outside, children visible
+        // Zoomed out: opaque background, label inside, children hidden (collapsing to parent)
+        // Zoomed in: stay at optimal state (boundary layer handles this)
+        const backgroundOpacity = isOptimal ? CONFIG.DETAIL_BACKGROUND_OPACITY_TRANSPARENT : (zoomedOut ? CONFIG.DETAIL_BACKGROUND_OPACITY_OPAQUE * detailLevel : CONFIG.DETAIL_BACKGROUND_OPACITY_TRANSPARENT);
+        const labelInside = zoomedOut && detailLevel > CONFIG.DETAIL_LABEL_INSIDE_THRESHOLD;
+        const showChildren = isOptimal || zoomedIn;
+        const showBorder = detailLevel > CONFIG.DETAIL_SHOW_BORDER_THRESHOLD;
+
         return {
-            visible: isVisible,
+            visible: true,
             opacity: opacity,
-            showBorder: detailLevel > this.config.showBorderThreshold,
-            backgroundOpacity: this.config.detailedBgOpacity + (1 - detailLevel) * (this.config.collapsedBgOpacity - this.config.detailedBgOpacity),
-            labelInside: detailLevel < this.config.labelInsideThreshold,
-            showChildren: detailLevel > this.config.showChildrenThreshold,
+            showBorder: showBorder,
+            backgroundOpacity: backgroundOpacity,
+            labelInside: labelInside,
+            showChildren: showChildren,
             collapseState: 1 - detailLevel
         };
     }
 
     /**
      * Calculate the actual radius for a node based on its layer and relative size.
-     * Uses per-layer relative scale if specified in metadata, otherwise uses global layerScaleFactor.
-     * Scales cumulatively: radius = relativeRadius × scale[0] × scale[1] × ... × scale[layer]
+     * Scales cumulatively: radius = relativeRadius × scale[0] × ... × scale[layer]
      */
     getNodeRadiusAtLayer(relativeRadius: number, layer: number): number {
-        // Cumulative scaling from layer 0 to target layer
         let cumulativeScale = 1;
         for (let i = 0; i < layer; i++) {
             cumulativeScale *= this.getLayerScale(i);
@@ -255,16 +218,7 @@ export class LayerDetailManager {
     }
 
     /**
-     * Get layer metadata for a given layer index.
-     * Returns the metadata if specified, otherwise undefined.
-     */
-    getLayerMetadata(layer: number): LayerMetadata | undefined {
-        return this.layerMetadata.get(layer);
-    }
-
-    /**
      * Get entity shape for a layer, falling back to default.
-     * @returns Shape type identifier as string (e.g., 'circle', 'rectangle')
      */
     getLayerEntityShape(layer: number): string {
         return this.layerMetadata.get(layer)?.entityShape ?? 'circle';
@@ -285,10 +239,10 @@ export class LayerDetailManager {
     }
 
     /**
-     * Get relative scale factor for a layer (scale relative to layer below).
-     * If specified in metadata, use that; otherwise use global layerScaleFactor.
+     * Get relative scale factor for a layer.
+     * Uses metadata if available, otherwise defaults to global layerScaleFactor.
      */
-    getLayerScale(layer: number): number {
+    private getLayerScale(layer: number): number {
         const metadata = this.layerMetadata.get(layer);
         if (metadata?.relativeScale !== undefined) {
             return metadata.relativeScale;
@@ -297,18 +251,18 @@ export class LayerDetailManager {
     }
 
     /**
-     * Get all unique layers in the entity hierarchy.
+     * Get all unique layers in the entity hierarchy (recursively).
      */
     getLayersInHierarchy(entities: Entity[]): number[] {
         const layers = new Set<number>();
-        
+
         const collectLayers = (entity: Entity) => {
             layers.add(entity.layer);
             if (entity.isComposite?.()) {
                 entity.children.forEach(child => collectLayers(child));
             }
         };
-        
+
         entities.forEach(e => collectLayers(e));
         return Array.from(layers).sort((a, b) => a - b);
     }

@@ -13,6 +13,23 @@ export class RectangleShape extends Shape {
         return 'rectangle';
     }
 
+    getCornerRadius(): number {
+        return this.cornerRadius;
+    }
+
+    getWidth(): number {
+        return this.width;
+    }
+
+    getHeight(): number {
+        return this.height;
+    }
+
+    getDiameter(): number {
+        // Diagonal distance from center to corner times 2 (for bounding)
+        return Math.sqrt((this.width / 2) ** 2 + (this.height / 2) ** 2) * 2;
+    }
+
     getRandomInteriorPoint(centerX: number, centerY: number): { x: number; y: number } {
         const hw = this.width / 2;
         const hh = this.height / 2;
@@ -84,5 +101,17 @@ export class RectangleShape extends Shape {
         const hw = this.width / 2 * 1.15;
         const hh = this.height / 2 * 1.15;
         return Math.abs(pointX - centerX) <= hw && Math.abs(pointY - centerY) <= hh;
+    }
+
+    draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number): void {
+        graphics.roundRect(x - this.width / 2, y - this.height / 2, this.width, this.height, this.cornerRadius);
+        graphics.fill({ color: colour, alpha: bgOpacity });
+    }
+
+    drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean): void {
+        graphics.roundRect(x - this.width / 2, y - this.height / 2, this.width, this.height, this.cornerRadius);
+        const strokeColour = isSelected ? 0xf39c12 : (isHighlighted ? 0xe74c3c : colour);
+        const strokeWidth = isSelected ? 3 : 2;
+        graphics.stroke({ color: strokeColour, width: strokeWidth });
     }
 }

@@ -1,6 +1,7 @@
 import { Shape } from '../shapes/Shape';
 import { ShapeFactory } from '../shapes/ShapeFactory';
 import { Connection } from './Connection';
+import { CONFIG } from '../config';
 
 /**
  * Entity - unified representation of any node in the graph.
@@ -20,14 +21,13 @@ export class Entity {
     visible: boolean;
     layer: number;
     colour: string;
-    radius: number;
     shape?: string; // Optional shape type identifier (e.g., 'circle', 'rectangle', or custom types). Can be overridden by layer metadata.
-    width?: number; // For shapes that use width (e.g., rectangles)
-    height?: number; // For shapes that use height (e.g., rectangles)
     shapeObject: Shape; // Internal shape for geometric calculations (always initialized)
     attributes: Record<string, any>;
     selected: boolean;
+    highlighted: boolean;
     alpha: number;
+    labelSize: number; // Computed label font size (base size * layer scale)
     parent: Entity | null; // Parent entity (if this entity is a child of another)
     
     // Optional - only present if this entity contains children
@@ -54,31 +54,19 @@ export class Entity {
         this.layer = attributes.layer ?? 0;
         this.colour = attributes.colour ?? '#3498db';
         
-        // Apply layer-based scaling to size (default layerScaleFactor = 5)
-        const layerScaleFactor = attributes.layerScaleFactor ?? 5;
-        const layerScale = Math.pow(layerScaleFactor, this.layer);
-        
-        this.radius = (attributes.radius ?? 15) * layerScale;
         this.attributes = attributes;
         this.selected = false;
+        this.highlighted = false;
         this.alpha = 1;
+        this.labelSize = CONFIG.LABEL_FONT_SIZE;
         this.parent = null;
 
         // Determine shape type (optional - can be overridden by layer metadata)
-        this.shape = attributes.shape;
-        this.width = (attributes.width ?? (this.radius * 2)) * layerScale;
-        this.height = (attributes.height ?? (this.radius * 2)) * layerScale;
+        this.shape = attributes.shape ?? 'circle';
         
-        // Initialize shape object using factory
-        // Defaults to 'circle' if entity shape not explicitly set
-        const shapeType = this.shape ?? 'circle';
-        this.shapeObject = ShapeFactory.createShape(
-            shapeType,
-            this.radius,
-            this.width,
-            this.height,
-            attributes.cornerRadius ?? 0
-        );
+        // Create shape: factory extracts shape-specific parameters from attributes
+        // At construction, sceneScale = 1 (will be scaled by GraphManager for other layers)
+        this.shapeObject = ShapeFactory.createShape(this.shape as string, attributes, 1);
         
         // Container properties - only initialized if this is a composite
         this.children = attributes.nodes ?? attributes.children ?? [];
@@ -104,26 +92,24 @@ export class Entity {
     }
 
     /**
-     * Update the shapeObject to match the resolved shape type (from entity or layer metadata).
-     * Uses ShapeFactory to create appropriate shape instance.
-     * This should be called when rendering if layer metadata might override the shape.
-     * 
-     * @param shapeType - Shape type identifier (e.g., 'circle', 'rectangle', or custom types)
+     * Recreate shape at a different scene scale (e.g., after layer scaling in GraphManager).
+     * The factory handles shape-specific parameter extraction at the new scale.
      */
-    updateShapeObject(shapeType: string): void {
-        this.shapeObject = ShapeFactory.createShape(shapeType, this.radius, this.width, this.height, this.attributes.cornerRadius);
+    recreateShapeAtScale(sceneScale: number): void {
+        this.shapeObject = ShapeFactory.createShape(this.shape as string, this.attributes, sceneScale);
     }
 
     /**
-     * Get the resolved shape type for this entity.
-     * Prioritises entity-level shape over layer metadata defaults.
-     * If no explicit shape is set, returns 'circle' as default.
-     * Note: Caller should use this result to call updateShapeObject() if rendering with layer metadata.
-     * 
-     * @returns Shape type identifier as string (e.g., 'circle', 'rectangle')
+     * Updates the shape type (typically when layer metadata overrides it).
+     * Recreates the shape with the new type at current scale.
      */
-    getResolvedShapeType(): string {
-        return this.shape ?? 'circle';
+    updateShapeType(newShapeType: string): void {
+        this.shape = newShapeType;
+        // Get current scale from shape's diameter
+        const currentDiameter = this.shapeObject.getDiameter();
+        const relativeRadius = this.attributes.size ?? this.attributes.radius ?? CONFIG.DEFAULT_NODE_RADIUS;
+        const sceneScale = currentDiameter / 2 / relativeRadius;
+        this.recreateShapeAtScale(sceneScale);
     }
 
     /**
@@ -250,11 +236,11 @@ export class Entity {
      * Highlight/select methods for interactivity.
      */
     highlight(): void {
-        this.attributes.highlighted = true;
+        this.highlighted = true;
     }
 
     unhighlight(): void {
-        this.attributes.highlighted = false;
+        this.highlighted = false;
     }
 
     select(): void {

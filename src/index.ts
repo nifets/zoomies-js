@@ -111,5 +111,7 @@ export class Zoomies {
     destroy(): void {
         this.manager.stop();
         this.manager.disablePhysics();
+        // Don't destroy renderer - PIXI removes the canvas from DOM
+        // Just clear the scene and let browser GC handle cleanup
     }
 }

@@ -53,6 +53,7 @@
 - class ZoomDebugWidget
 
 **Methods:**
+- public buildScaleBar(): void
 - public update(): void
 - private drawScale(): void
 - public destroy(): void
@@ -140,24 +141,22 @@
 **Exports:**
 - interface LayerMetadata
 - interface LayerDetailConfig
+- interface DetailState
 - class LayerDetailManager
 - interface DetailState
 
 **Methods:**
-- private getZoomPerLayer(): number
-- private getZoomWindowSize(): number
-- private updateLayerOffset(): void
-- public setHierarchyLayers(): void
+- public buildScaleBar(): void
 - public getOptimalZoomForLayer(): number
 - public getPrimaryLayerAtZoom(): number
+- public getVisibleLayers(): number
 - public getVisibleEntities(): Entity
 - public getDetailStateAtZoom(): DetailState
 - public getNodeRadiusAtLayer(): number
-- public getLayerMetadata(): LayerMetadata
 - public getLayerEntityShape(): string
 - public getLayerEntityColour(): string
 - public getLayerEdgeColour(): string
-- public getLayerScale(): number
+- private getLayerScale(): number
 - public getLayersInHierarchy(): number
 
 ---
@@ -188,6 +187,22 @@
 
 ---
 
+## src/managers/ScaleBar.ts
+
+**Exports:**
+- class ScaleBar
+
+**Methods:**
+- public getOptimalZoomForLayer(): number
+- public getPrimaryLayerAtZoom(): number
+- public getVisibleLayers(): number
+- public getDistanceFromOptimal(): number
+- public isLayerVisible(): boolean
+- public getNormalisedFadeParameter(): number
+- private getLayerScale(): number
+
+---
+
 ## src/managers/ZoomManager.ts
 
 **Exports:**
@@ -196,11 +211,7 @@
 **Methods:**
 - public setZoom(): void
 - private animateToTargetZoom(): void
-- public getNodeVisibility(): number
-- public getVisibleNodes(): Entity
 - public shouldAutoExpand(): boolean
-- public getCompositeCollapseState(): number
-- public interpolateOpacity(): number
 
 ---
 

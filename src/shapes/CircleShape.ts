@@ -12,6 +12,10 @@ export class CircleShape extends Shape {
         return 'circle';
     }
 
+    getDiameter(): number {
+        return this.radius * 2;
+    }
+
     getRandomInteriorPoint(centerX: number, centerY: number): { x: number; y: number } {
         const angle = Math.random() * Math.PI * 2;
         const dist = Math.random() * this.radius * 0.7;
@@ -47,5 +51,17 @@ export class CircleShape extends Shape {
         const dy = pointY - centerY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         return dist <= this.radius * 1.1;
+    }
+
+    draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number): void {
+        graphics.circle(x, y, this.radius);
+        graphics.fill({ color: colour, alpha: bgOpacity });
+    }
+
+    drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean): void {
+        graphics.circle(x, y, this.radius);
+        const strokeColour = isSelected ? 0xf39c12 : (isHighlighted ? 0xe74c3c : colour);
+        const strokeWidth = isSelected ? 3 : 2;
+        graphics.stroke({ color: strokeColour, width: strokeWidth });
     }
 }

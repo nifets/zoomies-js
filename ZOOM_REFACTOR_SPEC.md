@@ -23,8 +23,25 @@ L0-optimal          L1-optimal              L2-optimal
 
 The scale bar is defined by:
 
-1. **Base Position (L0-optimal)**: Arbitrary reference point (e.g., zoom = 0)
+1. **Base Position (L0-optimal)**: Reference point at zoom = 0 (most zoomed in)
 2. **Layer Spacing**: Distance between optimal points = `log₂(relativeScale)` zoom units
+3. **Direction**: As zoom decreases (more negative), scale increases (higher layers)
+
+#### Coordinate Systems
+
+**Zoom Coordinates** (camera zoom level):
+- Positive values = zoomed in (close up, detailed view)
+- Negative values = zoomed out (far away, abstract view)
+- Example: zoom = +2 (very zoomed in), zoom = -3 (very zoomed out)
+
+**Scale Coordinates** (layer abstraction):
+- L0 → L1 → L2 (left to right on mental model)
+- Higher layer number = higher abstraction = bigger entities
+- Visual scale increases from L0 to L2
+
+**Mapping** (zoom → scale):
+- High positive zoom → L0 (detailed, zoomed in)
+- Low negative zoom → L2 (abstract, zoomed out)
 
 #### Example
 
@@ -33,29 +50,38 @@ Layers:
 - **L1**: relativeScale = 3 (entities are 3× bigger than L0)
 - **L2**: relativeScale = 2 (entities are 2× bigger than L1)
 
-Scale Bar:
+Scale Bar (zoom coordinates):
 ```
-L0-optimal: zoom = 0
-L1-optimal: zoom = 0 + log₂(3) ≈ 1.585
-L2-optimal: zoom = 1.585 + log₂(2) = 2.585
+L0-optimal: zoom = 0 (most zoomed in)
+L1-optimal: zoom = -log₂(3) ≈ -1.585 (zoom out to see 3× bigger entities)
+L2-optimal: zoom = -1.585 - log₂(2) ≈ -2.585 (zoom out more to see 2× bigger entities)
 ```
 
-**Key Insight**: The logarithmic spacing ensures that visual scale invariance is maintained. When you zoom out by `log₂(k)` units, objects that are `k×` bigger appear the same size on screen.
+**Key Insight**: The logarithmic spacing ensures visual scale invariance. When you zoom out by `log₂(k)` units (subtract from zoom), objects that are `k×` bigger appear the same size on screen.
 
 ---
 
 ## Layer Visibility and Detail States
 
+### Boundary Layer Behaviour
+
+**Special Rule**: Boundary layers never fade out when zooming past their optimal:
+
+- **L0 (lowest layer)**: Always visible when zoom ≥ L0-optimal (zooming in past L0)
+- **Lmax (highest layer)**: Always visible when zoom ≤ Lmax-optimal (zooming out past Lmax)
+
+This ensures you can always see the most detailed layer when fully zoomed in, and always see the most abstract layer when fully zoomed out.
+
 ### For L1 Entities (Example)
 
-The following describes the behaviour of L1 entities as the zoom indicator moves along the scale bar:
+The following describes the behaviour of L1 entities as the zoom level changes:
 
-#### Position 1: L0-Optimal (zoom = 0)
+#### Position 1: L0-Optimal (zoom = 0, zoomed in)
 - **L1 entities**: Not visible
 - **L0 entities**: Fully opaque background, label inside, visible connections
 - **L2 entities**: Not visible
 
-#### Position 2: L1-Optimal (zoom ≈ 1.585)
+#### Position 2: L1-Optimal (zoom ≈ -1.585, zoomed out to L1 scale)
 - **L1 entities**:
   - Background: **Transparent** (opacity ≈ 0.15)
   - Border: **Visible**
@@ -68,7 +94,7 @@ The following describes the behaviour of L1 entities as the zoom indicator moves
   - Connections across different parents: **Hidden** (represented by synthetic L1 edges with branching visualisation)
 - **L2 entities**: Not visible
 
-#### Position 3: L2-Optimal (zoom ≈ 2.585)
+#### Position 3: L2-Optimal (zoom ≈ -2.585, zoomed out to L2 scale)
 - **L1 entities**:
   - Background: **Fully opaque** (opacity = 1.0)
   - Border: Visible
@@ -78,7 +104,7 @@ The following describes the behaviour of L1 entities as the zoom indicator moves
 - **L0 entities**: Not visible
 - **L2 entities**: Transparent background, border visible, label outside/above, visible connections
 
-#### Position 4: Beyond L2-Optimal (zoom > 3.5)
+#### Position 4: Beyond L2-Optimal (zoom < -3.5, very zoomed out)
 - **L1 entities**: Not visible
 - **L2 entities**: Fully opaque, label inside, visible connections
 
@@ -174,12 +200,12 @@ Initialise from layer metadata:
 ```typescript
 function buildScaleBar(layers: LayerMetadata[]): ScaleBar {
     const positions = new Map<number, number>()
-    let currentZoom = 0  // L0 at zoom = 0
+    let currentZoom = 0  // L0 at zoom = 0 (most zoomed in)
     positions.set(0, currentZoom)
     
     for (let i = 1; i < layers.length; i++) {
         const relativeScale = layers[i].relativeScale ?? 3
-        currentZoom += Math.log2(relativeScale)
+        currentZoom -= Math.log2(relativeScale)  // Subtract: zoom out for higher layers
         positions.set(i, currentZoom)
     }
     
@@ -187,8 +213,8 @@ function buildScaleBar(layers: LayerMetadata[]): ScaleBar {
     const buffer = 2.0
     return {
         layerPositions: positions,
-        minZoom: -buffer,
-        maxZoom: currentZoom + buffer
+        minZoom: currentZoom - buffer,  // Most negative (zoomed out)
+        maxZoom: buffer                  // Most positive (zoomed in)
     }
 }
 ```
@@ -205,6 +231,20 @@ function getDetailState(entity: Entity, zoom: number, scaleBar: ScaleBar): Detai
     // Calculate fade based on distance from optimal
     const fadeDistance = calculateFadeDistance(entity.layer, scaleBar)
     
+    // Special handling for boundary layers
+    const isMinLayer = entity.layer === 0
+    const isMaxLayer = entity.layer === maxLayer
+    
+    // Boundary layers never fade when zooming past their optimal
+    if (isMinLayer && distance > 0) {
+        // L0 zooming in: always visible
+        return optimalState(entity)
+    }
+    if (isMaxLayer && distance < 0) {
+        // Max layer zooming out: always visible
+        return optimalState(entity)
+    }
+    
     // Not visible if too far from optimal
     if (Math.abs(distance) > fadeDistance * 2) {
         return { visible: false, opacity: 0, ... }
@@ -212,13 +252,13 @@ function getDetailState(entity: Entity, zoom: number, scaleBar: ScaleBar): Detai
     
     // Interpolate properties based on position relative to optimal
     if (distance < -fadeDistance) {
-        // Before optimal (e.g., at L0 when entity is L1)
+        // Before optimal (e.g., at L2 zoom when entity is L1)
         return fadeInState(distance, fadeDistance)
     } else if (distance >= -fadeDistance && distance <= fadeDistance) {
         // At optimal
         return optimalState(entity)
     } else {
-        // After optimal (e.g., at L2 when entity is L1)
+        // After optimal (e.g., at L0 zoom when entity is L1)
         return fadeOutToOpaqueState(distance, fadeDistance)
     }
 }

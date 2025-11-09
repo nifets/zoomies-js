@@ -24,12 +24,16 @@ export function validateCompositeSize(
     // Calculate total area of all children
     let childrenTotalArea = 0;
     for (const child of composite.children) {
-        const area = Math.PI * child.radius * child.radius;
+        const diameter = child.shapeObject.getDiameter();
+        const radius = diameter / 2;
+        const area = Math.PI * radius * radius;
         childrenTotalArea += area;
     }
 
     // Calculate composite area
-    const compositeArea = Math.PI * composite.radius * composite.radius;
+    const compositeDiameter = composite.shapeObject.getDiameter();
+    const compositeRadius = compositeDiameter / 2;
+    const compositeArea = Math.PI * compositeRadius * compositeRadius;
 
     // Check if composite is large enough
     if (compositeArea < childrenTotalArea * minAreaMultiplier) {
@@ -38,7 +42,7 @@ export function validateCompositeSize(
             `Composite area: ${compositeArea.toFixed(0)}, ` +
             `Children total area: ${childrenTotalArea.toFixed(0)}, ` +
             `Minimum required: ${(childrenTotalArea * minAreaMultiplier).toFixed(0)}. ` +
-            `Consider increasing the composite radius from ${composite.radius} to at least ${Math.sqrt(childrenTotalArea * minAreaMultiplier / Math.PI).toFixed(0)}.`
+            `Consider increasing the composite radius from ${compositeRadius} to at least ${Math.sqrt(childrenTotalArea * minAreaMultiplier / Math.PI).toFixed(0)}.`
         );
         return false;
     }

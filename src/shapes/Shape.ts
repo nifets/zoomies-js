@@ -2,13 +2,27 @@
  * Abstract base class for node shapes.
  * Encapsulates geometry calculations for different shape types.
  * Subclasses should store all shape-specific parameters internally.
+ * All dimensions are in scene/world scale.
  */
 export abstract class Shape {
     /**
-     * Get the type identifier for this shape.
-     * Used for serialisation and factory construction.
+     * Get the diameter (bounding size) of this shape.
+     * Used for physics, spacing, and label positioning.
+     * For circles: 2 * radius. For rectangles: diagonal distance from center to corner.
      */
-    abstract getType(): string;
+    abstract getDiameter(): number;
+
+    /**
+     * Draw this shape on a graphics context (for rendering).
+     * Subclasses implement shape-specific drawing logic.
+     */
+    abstract draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number): void;
+
+    /**
+     * Draw border/stroke for this shape.
+     * Subclasses implement shape-specific stroke logic.
+     */
+    abstract drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean): void;
 
     /**
      * Get a random point inside the shape.

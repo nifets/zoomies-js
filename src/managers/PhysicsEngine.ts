@@ -1,5 +1,6 @@
 import { Entity } from '../core/Entity';
 import { Connection } from '../core/Connection';
+import { CONFIG } from '../config';
 
 /**
  * Physics engine configuration options.
@@ -307,7 +308,8 @@ export class PhysicsEngine {
                         
                         if (dist > 0) {
                             // Stronger parent attraction - child should primarily be attracted to parent
-                            const sizeScale = entity.radius / 15;
+                            const diameter = entity.shapeObject.getDiameter();
+                            const sizeScale = diameter / 2 / CONFIG.DEFAULT_NODE_RADIUS;
                             const force = dist * this.config.centerAttractionStrength * 0.5; // 50% of normal strength
                             entity.vx += (dx / dist) * force;
                             entity.vy += (dy / dist) * force;
@@ -376,7 +378,7 @@ export class PhysicsEngine {
             if (!entity.parent || !entity.parent.isComposite()) {
                 centerX += entity.x;
                 centerY += entity.y;
-                avgRadius += entity.radius;
+                avgRadius += entity.shapeObject.getDiameter() / 2;
                 topLevelCount++;
             }
         }
@@ -398,7 +400,8 @@ export class PhysicsEngine {
             const dy = centerY - entity.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist > 0) {
-                const sizeScale = (entity.radius + avgRadius) / (2 * avgRadius);
+                const radius = entity.shapeObject.getDiameter() / 2;
+                const sizeScale = (radius + avgRadius) / (2 * avgRadius);
                 const force = dist * this.config.centerAttractionStrength * sizeScale;
                 entity.vx += (dx / dist) * force;
                 entity.vy += (dy / dist) * force;
@@ -484,12 +487,14 @@ export class PhysicsEngine {
         const dist = Math.sqrt(distSq);
 
         // Minimum distance based on node sizes
-        const minDist = (a.radius + b.radius) * this.config.minNodeDistanceMultiplier;
+        const aRadius = a.shapeObject.getDiameter() / 2;
+        const bRadius = b.shapeObject.getDiameter() / 2;
+        const minDist = (aRadius + bRadius) * this.config.minNodeDistanceMultiplier;
         
         // Size scale factor: average of their radii relative to a reference
         // This makes forces proportional to node mass/size
-        const avgRadius = (a.radius + b.radius) / 2;
-        const sizeScale = avgRadius / 15; // 15 is a reference radius; adjust as needed
+        const avgRadius = (aRadius + bRadius) / 2;
+        const sizeScale = avgRadius / CONFIG.DEFAULT_NODE_RADIUS;
 
         // Apply strong repulsion when nodes are too close (overlapping region)
         if (dist < minDist) {
@@ -527,7 +532,9 @@ export class PhysicsEngine {
         const dist = Math.sqrt(dx * dx + dy * dy);
         
         // Minimum distance - don't pull nodes closer than this
-        const minDist = (a.radius + b.radius) * this.config.minNodeDistanceMultiplier;
+        const aRadius = a.shapeObject.getDiameter() / 2;
+        const bRadius = b.shapeObject.getDiameter() / 2;
+        const minDist = (aRadius + bRadius) * this.config.minNodeDistanceMultiplier;
         
         // Only apply attraction if distance is greater than minimum
         if (dist <= minDist) {
@@ -538,8 +545,8 @@ export class PhysicsEngine {
         const targetDist = minDist + this.config.targetLinkDistance;
         
         // Size scale factor: average radius relative to reference
-        const avgRadius = (a.radius + b.radius) / 2;
-        const sizeScale = avgRadius / 15; // Reference radius
+        const avgRadius = (aRadius + bRadius) / 2;
+        const sizeScale = avgRadius / CONFIG.DEFAULT_NODE_RADIUS;
         
         // Cap the attraction distance to prevent excessive forces
         const maxAttractionDistance = targetDist * 3;

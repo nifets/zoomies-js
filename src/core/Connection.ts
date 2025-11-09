@@ -27,6 +27,7 @@ export class Connection {
     targets: Entity[]; // Can be 0+ entities (parent-level endpoints)
     attributes: Record<string, any>;
     hidden: boolean;
+    highlighted: boolean;
     alpha: number;
     detailConnections?: Connection[]; // Lower-level connections this summarizes
     subEdges: SubEdge[]; // Metadata about user vs synthetic edges that make up this connection
@@ -43,6 +44,7 @@ export class Connection {
         this.targets = Array.isArray(targets) ? targets : [targets];
         this.attributes = attributes;
         this.hidden = false;
+        this.highlighted = false;
         this.alpha = 1;
         this.detailConnections = attributes.detailConnections;
         this.subEdges = [];
@@ -92,14 +94,14 @@ export class Connection {
      * Highlight the connection.
      */
     highlight(): void {
-        this.attributes.highlighted = true;
+        this.highlighted = true;
     }
 
     /**
      * Remove highlight.
      */
     unhighlight(): void {
-        this.attributes.highlighted = false;
+        this.highlighted = false;
     }
 
     /**

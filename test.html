@@ -97,32 +97,33 @@
             const nodeA = new Entity('Node_A', { 
                 layer: 0, 
                 colour: '#3498db', 
-                radius: 20,
+                size: 20,
             });
             
             const nodeB = new Entity('Node_B', { 
                 layer: 0, 
                 colour: '#e74c3c', 
-                radius: 20,
+                size: 20,
             });
             
             const nodeC = new Entity('Node_C', { 
                 layer: 0, 
                 colour: '#2ecc71', 
-                radius: 20,
+                size: 20,
             });
             
             const nodeD = new Entity('Node_D', { 
                 layer: 0, 
-                radius: 30,
+                size: 30,
             });
             
             const nodeE = new Entity('Node_E', { 
                 layer: 0, 
                 colour: '#9b59b6', 
                 shape: 'rectangle',
-                width: 60,
-                height: 40,
+                width: 20,
+                height: 100,
+                cornerRadius: 10,
             });
 
             const connAB = new Connection('conn_AB', [nodeA], [nodeB], {
@@ -171,13 +172,11 @@
             const node1A = new Entity('Node_1A', { 
                 layer: 0, 
                 colour: '#3498db', 
-                radius: 15,
             });
             
             const node1B = new Entity('Node_1B', { 
                 layer: 0, 
                 colour: '#3498db', 
-                radius: 15,
             });
 
             const conn1AB = new Connection('conn_1AB', [node1A], [node1B], {
@@ -189,20 +188,18 @@
                 children: [node1A, node1B],
                 layer: 1,
                 colour: '#e8daef',
-                radius: 50
+                radius: 60,
             });
 
             // Composite 2 nodes
             const node2A = new Entity('Node_2A', { 
                 layer: 0, 
                 colour: '#2ecc71', 
-                radius: 15,
             });
             
             const node2B = new Entity('Node_2B', { 
                 layer: 0, 
                 colour: '#2ecc71', 
-                radius: 15,
             });
 
             const conn2AB = new Connection('conn_2AB', [node2A], [node2B], {
@@ -214,20 +211,18 @@
                 children: [node2A, node2B],
                 layer: 1,
                 colour: '#d5f4e6',
-                radius: 50
+                radius: 60,
             });
 
             // Composite 3 nodes
             const node3A = new Entity('Node_3A', { 
                 layer: 0, 
                 colour: '#e74c3c', 
-                radius: 15,
             });
             
             const node3B = new Entity('Node_3B', { 
                 layer: 0, 
                 colour: '#e74c3c', 
-                radius: 15,
             });
 
             const conn3AB = new Connection('conn_3AB', [node3A], [node3B], {
@@ -239,20 +234,18 @@
                 children: [node3A, node3B],
                 layer: 1,
                 colour: '#fadbd8',
-                radius: 50
+                radius: 60,
             });
 
             // Orphan layer 0 nodes (not in any composite)
             const orphanX = new Entity('Orphan_X', { 
                 layer: 0, 
                 colour: '#f39c12', 
-                radius: 15,
             });
             
             const orphanY = new Entity('Orphan_Y', { 
                 layer: 0, 
                 colour: '#f39c12', 
-                radius: 15,
             });
 
             // Cross-composite connections
@@ -454,12 +447,17 @@
             };
         }
 
-        // ============================================================================
         // Initialize network
         // ============================================================================
         function initializeNetwork(networkName) {
             if (currentZoomies) {
                 currentZoomies.destroy();
+                // Replace the canvas to remove all old event listeners
+                const oldCanvas = document.getElementById('graph-canvas');
+                const newCanvas = document.createElement('canvas');
+                newCanvas.id = 'graph-canvas';
+                newCanvas.style.cssText = oldCanvas.style.cssText;
+                oldCanvas.replaceWith(newCanvas);
             }
 
             let network;

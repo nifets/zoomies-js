@@ -6,6 +6,7 @@ import { ZoomManager } from './ZoomManager';
 import { PhysicsEngine, PhysicsConfig } from './PhysicsEngine';
 import { LayerDetailManager, LayerDetailConfig } from './LayerDetailManager';
 import { ZoomDebugWidget } from '../debug/ZoomDebugWidget';
+import { CONFIG } from '../config';
 
 /**
  * Main graph manager and scene controller.
@@ -87,47 +88,60 @@ export class GraphManager {
      * - Populates entity.internalConnections for edges between their children
      * - Generates synthetic edges from parent-child relationships
      * - Merges user + synthetic edges that connect the same node pairs
-     * - Updates LayerDetailManager with hierarchy layer bounds and adjusts zoom range
-     * 
+     * - Builds scale bar from layer hierarchy
+     *
      * Call this after creating entities and connections, before physics/rendering.
      */
     buildGraph(entities: Entity[], connections: Connection[]): void {
+        console.log('[GraphManager] buildGraph called');
         // Store the flat lists
         this.entities = entities;
         this.allConnections = connections;
-        
-        // Calculate min/max layers in hierarchy
+
+        // Calculate min/max layers in hierarchy and build scale bar
         const layers = this.layerDetailManager.getLayersInHierarchy(entities);
         if (layers.length > 0) {
             const minLayer = Math.min(...layers);
             const maxLayer = Math.max(...layers);
-            this.layerDetailManager.setHierarchyLayers(minLayer, maxLayer);
+            this.layerDetailManager.buildScaleBar(minLayer, maxLayer);
+
+            // Update ZoomManager's range from scale bar
+            const scaleBar = this.layerDetailManager.scaleBar;
+            if (scaleBar) {
+                this.zoomManager.minZoom = scaleBar.minZoom;
+                this.zoomManager.maxZoom = scaleBar.maxZoom;
+            }
             
-            // Update ZoomManager's range to match calculated zoom range
-            this.zoomManager.minZoom = this.layerDetailManager.config.zoomRangeMin;
-            this.zoomManager.maxZoom = this.layerDetailManager.config.zoomRangeMax;
+            // Scale entity sizes based on layer
+            // Recreate shapes at the scaled size for this layer
+            for (const entity of entities) {
+                const scaleFactor = this.layerDetailManager.getNodeRadiusAtLayer(1, entity.layer);
+                entity.labelSize = CONFIG.LABEL_FONT_SIZE * scaleFactor;
+                entity.recreateShapeAtScale(scaleFactor);
+                console.log(`[GraphManager] Scaled ${entity.id} (L${entity.layer}): scale factor ${scaleFactor}`);
+            }
         }
-        
+
         // For each entity, collect all connections that involve it
         for (const entity of entities) {
-            entity.connections = connections.filter(conn => 
+            entity.connections = connections.filter(conn =>
                 this.connectionTouchesEntity(conn, entity)
             );
-            
+
             // For composites, collect internal connections (between children)
             if (entity.isComposite()) {
                 const childIds = new Set(entity.children.map(c => c.id));
-                entity.internalConnections = connections.filter(conn => 
+                entity.internalConnections = connections.filter(conn =>
                     conn.sources.length > 0 && conn.targets.length > 0 &&
-                    childIds.has(conn.sources[0].id) && 
+                    childIds.has(conn.sources[0].id) &&
                     childIds.has(conn.targets[0].id)
                 );
             }
         }
-        
+
         // Generate synthetic edges from hierarchy
         const syntheticEdges = this.generateSyntheticEdges(entities);
-        
+
         // Merge user and synthetic edges that connect the same node pairs
         this.mergeConnections(connections, syntheticEdges);
     }
@@ -480,7 +494,7 @@ export class GraphManager {
     private bindInteractions(): void {
         this.canvas.addEventListener('wheel', (e: WheelEvent) => {
             e.preventDefault();
-            const delta = e.deltaY > 0 ? -0.1 : 0.1;
+            const delta = e.deltaY > 0 ? -CONFIG.ZOOM_SCROLL_SENSITIVITY : CONFIG.ZOOM_SCROLL_SENSITIVITY;
             
             // Get mouse position in canvas coordinates
             const rect = this.canvas.getBoundingClientRect();
@@ -500,11 +514,23 @@ export class GraphManager {
         };
 
         const getEntityAtPoint = (worldX: number, worldY: number): Entity | null => {
+            // Only check entities in visible layers (same filtering as physics and renderer)
+            const visibleEntities = this.layerDetailManager.getVisibleEntities(
+                this.entities,
+                this.zoomManager.zoomLevel
+            );
+            const visibleEntitySet = new Set(visibleEntities);
+            
             let closest: Entity | null = null;
             let closestDist = Infinity;
             
             for (const entity of this.getAllEntities()) {
                 if (entity.implicit) continue;
+                
+                // Skip entities not in visible layers
+                if (!visibleEntitySet.has(entity)) {
+                    continue;
+                }
                 
                 // Check if entity is visible (opacity > 0)
                 const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
@@ -590,7 +616,9 @@ export class GraphManager {
 
             for (const composite of this.getAllComposites()) {
                 const dist = Math.hypot(composite.x - worldX, composite.y - worldY);
-                if (dist < composite.radius * 1.5 * 2) {
+                const diameter = composite.shapeObject.getDiameter();
+                const radius = diameter / 2;
+                if (dist < radius * 1.5 * 2) {
                     if (composite.collapsed) {
                         this.expandEntity(composite);
                     } else {
@@ -603,32 +631,30 @@ export class GraphManager {
     }
 
     /**
-     * Update visibility based on zoom.
+     * Update entity and connection visibility based on scale bar and detail state.
      */
     private updateVisibility(): void {
-        // Get the visible layer range at current zoom
-        const visibleLayerRange = this.layerDetailManager.getVisibleLayerRange(this.zoomManager.zoomLevel);
-        
+        const zoomLevel = this.zoomManager.zoomLevel;
+        const visibleLayers = this.layerDetailManager.getVisibleLayers(zoomLevel);
+        const visibleSet = new Set(visibleLayers);
+
         for (const entity of this.getAllEntities()) {
-            // Entity is visible if it's within the visible layer range
-            const isInLayerRange = entity.layer >= visibleLayerRange.min && entity.layer <= visibleLayerRange.max;
-            
-            if (isInLayerRange) {
-                const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
+            if (visibleSet.has(entity.layer)) {
+                const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, zoomLevel);
                 entity.setOpacity(detailState.opacity);
-                entity.visible = true;
+                entity.visible = detailState.visible;
             } else {
                 entity.setOpacity(0);
                 entity.visible = false;
             }
         }
 
+        // Update connection visibility: visible if both endpoints are in visible layers
         for (const conn of this.getAllConnections()) {
-            // Connection is visible if both its sources and targets are in visible layer range
-            const sourceVisible = conn.sources.some(s => s.layer >= visibleLayerRange.min && s.layer <= visibleLayerRange.max);
-            const targetVisible = conn.targets.some(t => t.layer >= visibleLayerRange.min && t.layer <= visibleLayerRange.max);
-            
-            if (sourceVisible || targetVisible) {
+            const sourceInView = conn.sources.some(s => visibleSet.has(s.layer));
+            const targetInView = conn.targets.some(t => visibleSet.has(t.layer));
+
+            if (sourceInView || targetInView) {
                 conn.setOpacity(1.0);
             } else {
                 conn.setOpacity(0);
@@ -654,21 +680,37 @@ export class GraphManager {
         this.updateZoomDebug();
         this.renderer.clear();
 
+        // Get visible entities at current zoom (same filtering as physics engine)
+        const visibleEntities = this.layerDetailManager.getVisibleEntities(
+            this.entities,
+            this.zoomManager.zoomLevel
+        );
+        const visibleEntitySet = new Set(visibleEntities);
+
         const visibleConnections = this.getVisibleConnections();
         const visibleNodes = this.getVisibleNodes();
+
+        // Filter visible nodes to only those in visible layers
+        const layerFilteredNodes = visibleNodes.filter(node => visibleEntitySet.has(node));
+
+        // Filter connections to only those with at least one endpoint in visible layers
+        const layerFilteredConnections = visibleConnections.filter(conn =>
+            conn.sources.some(s => visibleEntitySet.has(s)) ||
+            conn.targets.some(t => visibleEntitySet.has(t))
+        );
 
         // Group nodes and edges by layer
         const nodesByLayer = new Map<number, Entity[]>();
         const connectionsByLayer = new Map<number, Connection[]>();
         
-        for (const node of visibleNodes) {
+        for (const node of layerFilteredNodes) {
             if (!nodesByLayer.has(node.layer)) {
                 nodesByLayer.set(node.layer, []);
             }
             nodesByLayer.get(node.layer)!.push(node);
         }
         
-        for (const conn of visibleConnections) {
+        for (const conn of layerFilteredConnections) {
             let maxLayer = 0;
             for (const source of conn.sources) {
                 maxLayer = Math.max(maxLayer, source.layer);
@@ -690,18 +732,15 @@ export class GraphManager {
             // Draw edges at this layer
             const edgesAtLayer = connectionsByLayer.get(layer) || [];
             for (const conn of edgesAtLayer) {
-                let totalLayer = 0;
-                let count = 0;
+                let minLayer = Infinity;
                 for (const source of conn.sources) {
-                    totalLayer += source.layer;
-                    count++;
+                    minLayer = Math.min(minLayer, source.layer);
                 }
                 for (const target of conn.targets) {
-                    totalLayer += target.layer;
-                    count++;
+                    minLayer = Math.min(minLayer, target.layer);
                 }
-                const avgLayer = count > 0 ? totalLayer / count : 0;
-                const tempEntity = { layer: Math.round(avgLayer), x: 0, y: 0 } as Entity;
+                minLayer = minLayer === Infinity ? 0 : minLayer;
+                const tempEntity = { layer: minLayer, x: 0, y: 0 } as Entity;
                 const detailState = this.layerDetailManager.getDetailStateAtZoom(tempEntity, this.zoomManager.zoomLevel);
                 this.renderer.drawConnection(conn, detailState);
             }
@@ -754,6 +793,9 @@ export class GraphManager {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
+        // Clear zoom callbacks to prevent updates
+        this.zoomManager.onZoomChange = null;
+        this.renderer.destroy();
     }
 
     /**
@@ -793,6 +835,18 @@ export class GraphManager {
             this.zoomDebugWidget = null;
         } else {
             this.zoomDebugWidget = new ZoomDebugWidget(this.layerDetailManager.config.layerScaleFactor);
+            
+            // Build scale bar in widget if we have one
+            if (this.layerDetailManager.scaleBar) {
+                const layers = this.layerDetailManager.getLayersInHierarchy(this.entities);
+                if (layers.length > 0) {
+                    this.zoomDebugWidget.buildScaleBar(
+                        Math.min(...layers),
+                        Math.max(...layers),
+                        this.layerDetailManager.config.layerScaleFactor
+                    );
+                }
+            }
         }
     }
 
@@ -804,7 +858,7 @@ export class GraphManager {
 
         const zoomLevel = this.zoomManager.zoomLevel;
         const currentLayer = this.layerDetailManager.getPrimaryLayerAtZoom(zoomLevel);
-        
+
         // Create a temporary entity at the current layer to calculate its opacity
         const tempEntity = { layer: currentLayer } as Entity;
         const detailState = this.layerDetailManager.getDetailStateAtZoom(tempEntity, zoomLevel);
