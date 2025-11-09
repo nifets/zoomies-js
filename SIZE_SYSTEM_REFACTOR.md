@@ -3,7 +3,7 @@
 ## Overview
 Replace absolute pixel sizes with Shape-based geometry + dual world/screen sizing for scalability and memory safety.
 
-**Document Version:** 2.0 (includes label system integration + edge rendering future-proofing)
+**Document Version:** 2.1 (EdgeShape removed - Connection handles width directly)
 
 ## Problem Statement
 Current system uses absolute pixel sizes stored in Entity/Connection attributes. With deep hierarchies and layer scaling, this causes:
@@ -14,12 +14,17 @@ Current system uses absolute pixel sizes stored in Entity/Connection attributes.
 
 ## Solution: Shape-Centric Architecture
 
-**Shape handles ALL geometry and scaling:**
+**Shape for nodes with geometric variety:**
 - **Normalized geometry**: Shape stores dimensions in abstract coordinate space (radius: 1.0, width: 1.2)
 - **World-space methods**: `getWorldSize(baseScale, cumulativeScale)` for physics
 - **Screen-space methods**: `getScreenSize(baseScale, cumulativeScale, cameraScale)` for rendering
 - **Area calculations**: `getArea()` returns normalized area, `getWorldArea()` returns scaled area
-- **Shape owns sizing logic**: Entity/Connection just delegate to their shapes
+- **Entity delegates to Shape**: Different node shapes (circle, rectangle) have different geometry
+
+**Connection handles width directly (no Shape):**
+- **No geometric variety**: All edges are straight lines with just a width
+- **Direct width scaling**: Connection computes world/screen width directly
+- **No forced abstraction**: Shape pattern only used where there's actual geometric variety
 
 **Coordinate System Convention:**
 - **Prefix all coordinate variables** with their space: `worldX`, `screenX`, `normalizedRadius`
@@ -238,10 +243,14 @@ export class RectangleShape extends Shape {
         const screenWidth = this.width * scale;
         const screenHeight = this.height * scale;
         
-        graphics.rect(-screenWidth / 2, -screenHeight / 2, screenWidth, screenHeight);
+        // Preserve rounded corners (scale corner radius proportionally)
+        const screenCornerRadius = this.cornerRadius * scale;
+        graphics.roundRect(-screenWidth / 2, -screenHeight / 2, screenWidth, screenHeight, screenCornerRadius);
     }
 }
 ```
+
+**Note:** RectangleShape already has `cornerRadius` in constructor and stores it. The `draw()` method now scales it proportionally with the rectangle dimensions.
 
 ---
 
@@ -321,70 +330,23 @@ export class Entity {
 
 ---
 
-### 5. Create EdgeShape for Connections
-**File:** `src/shapes/EdgeShape.ts` (NEW FILE)
 
-**New shape class for edges:**
-```typescript
-import { Shape } from './Shape';
 
-export class EdgeShape extends Shape {
-    constructor(private width: number = 1.0) {
-        super();
-    }
-    
-    getArea(): number {
-        // Edges don't have area, return 0
-        return 0;
-    }
-    
-    getDiameter(): number {
-        // Return width as "size"
-        return this.width;
-    }
-    
-    getWorldSize(baseScale: number, cumulativeScale: number): number {
-        // Use DEFAULT_EDGE_WIDTH as base scale
-        return (this.width * baseScale) / cumulativeScale;
-    }
-    
-    getBorderPoint(angle: number): { x: number; y: number } {
-        // Not applicable for edges
-        return { x: 0, y: 0 };
-    }
-    
-    isInside(x: number, y: number): boolean {
-        // Not applicable for edges
-        return false;
-    }
-    
-    draw(graphics: any, screenSize: number): void {
-        // Edges are drawn differently (line from source to target)
-        // This method not used for edges - drawing handled by Renderer
-    }
-}
-```
-
----
-
-### 6. Update Connection to Use EdgeShape
+### 5. Update Connection for Width Scaling
 **File:** `src/core/Connection.ts`
 
-**Add EdgeShape and delegate sizing:**
+**Add width scaling methods (no EdgeShape needed):**
 ```typescript
-import { EdgeShape } from '../shapes/EdgeShape';
 import { CONFIG } from '../config';
 
 export class Connection {
     // ...existing properties
     private cumulativeLayerScale: number = 1.0;
-    private edgeShape: EdgeShape;
+    private normalizedWidth: number;
     
     constructor(id: string, source: Entity[], target: Entity[], attributes: ConnectionAttributes = {}) {
         // ...existing code
-        
-        const normalizedWidth = attributes.width ?? 1.0;
-        this.edgeShape = new EdgeShape(normalizedWidth);
+        this.normalizedWidth = attributes.width ?? 1.0;
     }
     
     /**
@@ -395,41 +357,34 @@ export class Connection {
     }
     
     /**
-     * Get cached cumulative layer scale (for rendering).
+     * Get cached cumulative layer scale (for label rendering).
      */
     getCumulativeScale(): number {
         return this.cumulativeLayerScale;
     }
     
     /**
-     * Get world-space width (for rendering).
+     * Get world-space width (for physics, if needed).
      */
     getWorldWidth(): number {
-        return this.edgeShape.getWorldSize(
-            CONFIG.DEFAULT_EDGE_WIDTH,
-            this.cumulativeLayerScale
-        );
+        return (this.normalizedWidth * CONFIG.DEFAULT_EDGE_WIDTH) / this.cumulativeLayerScale;
     }
     
     /**
      * Get screen-space width (for rendering).
-     * @param cameraScale - Renderer.scale
+     * @param cameraScale - Renderer.scale (camera zoom level)
      */
     getScreenWidth(cameraScale: number): number {
-        return this.edgeShape.getScreenSize(
-            CONFIG.DEFAULT_EDGE_WIDTH,
-            this.cumulativeLayerScale,
-            cameraScale
-        );
+        return this.getWorldWidth() / cameraScale;
     }
 }
 ```
 
-**Note:** Added `getCumulativeScale()` getter for consistency with Entity (needed by edge label renderer).
+**Why no EdgeShape?** Edges don't have geometry variety like nodes (circle vs rectangle). All edges are straight lines with just a width. No need for a Shape abstraction - Connection handles width scaling directly.
 
 ---
 
-### 7. Update GraphManager Hit Detection
+### 6. Update GraphManager Hit Detection
 **File:** `src/managers/GraphManager.ts`
 
 **Update containsPoint() call with explicit coordinate system:**
@@ -447,13 +402,33 @@ const getWorldCoords = (e: MouseEvent) => {
     return { worldX, worldY };
 };
 
-// In getEntityAtPoint() function (line ~544)
+// In getEntityAtPoint() function (line ~518)
 const getEntityAtPoint = (worldX: number, worldY: number): Entity | null => {
     // COORDINATE SYSTEM: WORLD SPACE
     // worldX, worldY are already transformed from screen space
     
-    for (const entity of this.getAllEntities()) {
-        // ...visibility checks
+    // Get visible entities (already filtered by layer visibility)
+    const visibleEntities = this.layerDetailManager.getVisibleEntities(
+        this.entities,
+        this.zoomManager.zoomLevel
+    );
+    const visibleEntitySet = new Set(visibleEntities);
+    
+    let closest: Entity | null = null;
+    let closestDist = Infinity;
+    
+    // OPTIMIZATION: Iterate only visible entities instead of all entities
+    // OLD: for (const entity of this.getAllEntities())
+    // NEW: Iterate visibleEntities directly (no need for Set lookup)
+    for (const entity of visibleEntities) {
+        if (entity.implicit) continue;
+        
+        // Check if entity is visible (opacity > 0)
+        const detailState = this.layerDetailManager.getDetailStateAtZoom(
+            entity,
+            this.zoomManager.zoomLevel
+        );
+        if (detailState.opacity <= 0) continue;
         
         // OLD: entity.shapeObject.containsPoint(worldX, worldY, entity.x, entity.y)
         // NEW: Use entity.containsPoint() which handles worldSize internally
@@ -461,8 +436,15 @@ const getEntityAtPoint = (worldX: number, worldY: number): Entity | null => {
             continue;
         }
         
-        // ...distance sorting
+        // Calculate distance for sorting (closest entity wins)
+        const dist = Math.hypot(entity.x - worldX, entity.y - worldY);
+        if (dist < closestDist) {
+            closest = entity;
+            closestDist = dist;
+        }
     }
+    
+    return closest;
 }
 ```
 
@@ -470,11 +452,14 @@ const getEntityAtPoint = (worldX: number, worldY: number): Entity | null => {
 - **Explicit coordinate spaces**: screenX/worldX naming makes it clear
 - **Single transformation**: Screen → World happens once, not per entity
 - **Correct hit detection**: Entity.containsPoint() uses world-space size
+- **Performance optimization**: Iterate only visible entities (not all entities, then filter)
 - **Comment annotations**: Makes coordinate system obvious to future readers
+
+**Performance Note:** The current implementation calls `getAllEntities()` (recursive tree traversal) then filters out invisible entities using a Set. The optimized version iterates `visibleEntities` directly, avoiding unnecessary tree traversal and Set lookups. In a large graph with many layers, this can significantly reduce hit detection overhead.
 
 ---
 
-### 8. Update GraphManager to Inject Scale Factors
+### 7. Update GraphManager to Inject Scale Factors
 **File:** `src/managers/GraphManager.ts`
 
 **Replace shape recreation with scale injection:**
@@ -686,13 +671,13 @@ export const CONFIG = {
     DEFAULT_NODE_RADIUS: 200,
     
     // Base edge width (pixels at layer 0, zoom 1.0)
-    DEFAULT_EDGE_WIDTH: 2,
+    DEFAULT_EDGE_WIDTH: 20,
     
     // ...rest of config
 };
 ```
 
-**Note:** DEFAULT_EDGE_WIDTH set to 2 (current default in Renderer). User can adjust this constant to change all edge widths globally.
+**Note:** DEFAULT_EDGE_WIDTH set to 20 (current default in Renderer). User can adjust this constant to change all edge widths globally.
 
 ---
 
@@ -920,22 +905,20 @@ export class LabelRenderer {
      * Calculate label transform for a node entity.
      * COORDINATE SYSTEM: WORLD SPACE (positions in physics coords)
      * 
-     * @param worldX - Entity center X in world space
-     * @param worldY - Entity center Y in world space
-     * @param worldDiameter - Pre-computed world-space diameter from entity.getWorldSize()
-     * @param cumulativeLayerScale - Product of layer relative scales
+     * @param node - Entity to calculate label for
      * @param cameraScale - Renderer.scale (camera zoom)
      * @param detailState - Detail state from LayerDetailManager (controls inside/outside positioning)
      * @returns Label transform with position, rotation, and font size
      */
     static getNodeLabelTransform(
-        worldX: number,
-        worldY: number,
-        worldDiameter: number,
-        cumulativeLayerScale: number,
+        node: Entity,
         cameraScale: number,
         detailState: DetailState | null
     ): LabelTransform {
+        const worldX = node.x;
+        const worldY = node.y;
+        const worldDiameter = node.getWorldSize();
+        const cumulativeLayerScale = node.getCumulativeScale();
         const labelOffset = 20; // pixels in world space (visual spacing)
         
         // Position: inside (center) or outside (above entity)
@@ -1016,51 +999,40 @@ export class LabelRenderer {
 ### 15. Update Entity to Remove labelSize Property
 **File:** `src/core/Entity.ts`
 
-**Remove obsolete labelSize property and computation:**
+**Remove obsolete labelSize property:**
 ```typescript
 export class Entity {
-    // ...existing properties
+    // Remove this property (no longer needed):
+    // labelSize: number;
     
-    // REMOVE these:
-    // labelSize: number;  // Computed label font size (base size * layer scale)
-    
-    constructor(id: string, attributes: Record<string, any> = {}) {
-        // ...existing code
-        
-        // REMOVE this line:
-        // this.labelSize = CONFIG.LABEL_FONT_SIZE;
-        
-        // ...rest of constructor unchanged
-    }
+    // Remove from constructor (no longer needed):
+    // this.labelSize = CONFIG.LABEL_FONT_SIZE;
 }
 ```
 
-**Why remove:** Font size is now computed on-demand by `LabelRenderer.getNodeLabelTransform()`. Keeping `labelSize` creates duplicate logic and violates single source of truth.
+**Why:** Font size is computed on-demand by `LabelRenderer.getNodeLabelTransform()` using the entity's cumulative scale. No cached value needed.
 
 ---
 
 ### 16. Update GraphManager to Remove labelSize Assignment
 **File:** `src/managers/GraphManager.ts`
 
-**Remove manual label size scaling:**
+**Remove manual label size scaling from buildGraph():**
 ```typescript
 export class GraphManager {
     buildGraph() {
-        // ...existing code
-        
-        // Inject cumulative scale instead of recreating shapes
+        // Inject cumulative scale for entities
         for (const entity of this.entities) {
             const cumulativeScale = this.getCumulativeScale(entity.layer);
             entity.setCumulativeScale(cumulativeScale);
             
-            // REMOVE this line (labelSize no longer used):
-            // entity.labelSize = CONFIG.LABEL_FONT_SIZE * scaleFactor;
+            // Don't set entity.labelSize - it's computed by LabelRenderer
         }
-        
-        // ...rest of buildGraph
     }
 }
 ```
+
+**Why:** LabelRenderer computes font size on-demand from the entity's cumulative scale. No manual assignment needed.
 
 ---
 
@@ -1082,14 +1054,8 @@ export class Renderer {
         const targetRes = Math.max(4, this.scale * 4);
         
         // Calculate label transform
-        const worldDiameter = node.getWorldSize();
-        const cumulativeScale = node.getCumulativeScale(); // Cached in entity
-        
         const labelTransform = LabelRenderer.getNodeLabelTransform(
-            node.x,
-            node.y,
-            worldDiameter,
-            cumulativeScale,
+            node,
             this.scale,
             detailState
         );
@@ -1200,42 +1166,13 @@ export class Renderer {
 
 **Key changes:**
 - Remove manual label positioning logic
-- Call `LabelRenderer.getNodeLabelTransform()` directly (no Entity delegation)
+- Call `LabelRenderer.getNodeLabelTransform()` directly passing the entity
 - Apply rotation for edge labels (aligned with edge angle)
 - Font size computed on-demand (no cached `entity.labelSize`)
 
 ---
 
-### 18. Add getCumulativeScale() to Entity
-**File:** `src/core/Entity.ts`
-
-**Add getter for cached cumulative scale:**
-```typescript
-export class Entity {
-    // ...existing properties
-    private cumulativeLayerScale: number = 1.0;
-    
-    /**
-     * Inject cumulative layer scale from GraphManager.
-     */
-    setCumulativeScale(cumulativeLayerScale: number): void {
-        this.cumulativeLayerScale = cumulativeLayerScale;
-    }
-    
-    /**
-     * Get cached cumulative layer scale (for rendering/physics).
-     */
-    getCumulativeScale(): number {
-        return this.cumulativeLayerScale;
-    }
-    
-    // ...rest of entity methods
-}
-```
-
----
-
-### 19. test.html
+### 18. Update test.html Demo
 **File:** `test.html`
 
 **Replace absolute pixel sizes with normalized coordinates:**
@@ -1296,36 +1233,36 @@ new Connection('translation_A', [pairA.mRNA], [pairA.protein], {
 
 3. **Update RectangleShape** (section 3):
    - Implement `getArea()` → `width × height`
-   - Update `draw()` to scale width/height from screenSize
-
-4. **Create EdgeShape** (section 5):
-   - New file for connection geometry
-   - Implements Shape interface
+   - Update `draw()` to preserve rounded corners
 
 ### Phase 2: Entity/Connection Delegation
-5. **Update Entity** (section 4):
+
+4. **Update Entity** (section 4):
    - Add `setCumulativeScale()` method
+   - Add `getCumulativeScale()` getter
    - Add `getWorldSize()` → delegates to `shapeObject.getWorldSize()`
    - Add `getWorldArea()` → delegates to `shapeObject.getWorldArea()`
    - Add `getScreenSize()` → delegates to `shapeObject.getScreenSize()`
 
-6. **Update Connection** (section 6):
-   - Add EdgeShape member
+5. **Update Connection** (section 5):
+   - Store `normalizedWidth` property
    - Add `setCumulativeScale()` method
-   - Add `getWorldWidth()`, `getScreenWidth()` → delegate to EdgeShape
+   - Add `getCumulativeScale()` getter
+   - Add `getWorldWidth()`, `getScreenWidth()` methods (no EdgeShape needed)
 
 ### Phase 3: Update Consumers
 
-7. **Update GraphManager** (sections 8, 11, 16):
-   - Replace `recreateShapeAtScale()` with `setCumulativeScale()` (line ~122)
-   - Update right-click handler to use `getWorldSize()` (line ~621)
-   - Remove `entity.labelSize` assignment (no longer needed)
+6. **Update GraphManager** (sections 6, 7, 11, 15):
+   - Update hit detection to iterate visibleEntities directly (section 6)
+   - Replace `recreateShapeAtScale()` with `setCumulativeScale()` (section 7)
+   - Update right-click handler to use `getWorldSize()` (section 11)
+   - Remove `entity.labelSize` assignment (section 15)
 
-8. **Update PhysicsEngine** (section 9):
+7. **Update PhysicsEngine** (section 8):
    - Replace ALL `shapeObject.getDiameter()` → `entity.getWorldSize()`
    - Lines: 311, 381, 403, 490, 491, 535, 536
 
-9. **Update Renderer** (sections 10, 17):
+8. **Update Renderer** (sections 9, 16):
    - Replace `node.shapeObject.getDiameter()` → `node.getScreenSize(this.scale)`
    - Add comment: `// COORDINATE SYSTEM: SCREEN SPACE (rendering)`
    - Use `shape.draw(graphics, screenSize)` for rendering
@@ -1334,47 +1271,53 @@ new Connection('translation_A', [pairA.mRNA], [pairA.protein], {
    - Lines: 192, 232, 253, 266, 280, 308, 313, 318
    - **Add LabelRenderer integration** for node and edge labels
 
-10. **Update validation.ts** (section 11):
+8. **Update Renderer** (sections 9, 16):
+   - Replace `node.shapeObject.getDiameter()` → `node.getScreenSize(this.scale)`
+   - Add comment: `// COORDINATE SYSTEM: SCREEN SPACE (rendering)`
+   - Use `shape.draw(graphics, screenSize)` for rendering
+   - Replace `connection.attributes.width` → `connection.getScreenWidth(this.scale)`
+   - **Add LabelRenderer integration** for node and edge labels
+
+9. **Update validation.ts** (section 10):
     - Replace manual area calculations → `entity.getWorldArea()`
     - Add comment: `// COORDINATE SYSTEM: WORLD SPACE (comparing physics sizes)`
     - Lines: 27-30, 34-36
 
 ### Phase 4: Label System Integration
 
-11. **Create LabelRenderer** (section 14):
+10. **Create LabelRenderer** (section 13):
     - New file: `src/rendering/LabelRenderer.ts`
     - Static utility class with `getNodeLabelTransform()` and `getEdgeLabelTransform()`
     - Handles label positioning, rotation, and font size scaling
     - No Entity/Connection delegation needed (direct calls from Renderer)
 
-12. **Update Entity** (sections 15, 18):
+11. **Update Entity** (section 14):
     - Remove `labelSize` property (obsolete)
-    - Add `getCumulativeScale()` getter method
-    - Keep `setCumulativeScale()` for GraphManager injection
+    - `getCumulativeScale()` already added in section 4
 
-13. **Update Renderer to use LabelRenderer** (section 17):
-    - Import and call `LabelRenderer.getNodeLabelTransform()` directly
+12. **Update Renderer to use LabelRenderer** (section 16):
+    - Import and call `LabelRenderer.getNodeLabelTransform()` directly (pass entity, not individual properties)
     - Remove manual label positioning logic
     - Apply label rotation for edges (aligned with edge angle)
     - Update font size dynamically (no cached labelSize)
 
 ### Phase 5: Config and Demo
 
-14. **Update Config** (section 12):
+13. **Update Config** (section 11):
     - Add `DEFAULT_NODE_RADIUS: 200`
-    - Add `DEFAULT_EDGE_WIDTH: 2`
+    - Add `DEFAULT_EDGE_WIDTH: 20`
 
-15. **Update test.html** (section 19):
+14. **Update test.html** (section 17):
     - Change from `radius: 200` → `radius: 1.0` (normalized)
-    - Change from `width: 4` → `width: 2.0` (normalized)
+    - Change from `width: 4` → `width: 1.0` (normalized)
 
-16. **Remove deprecated code**:
+15. **Remove deprecated code**:
     - `Entity.recreateShapeAtScale()` no longer needed
     - `Entity.labelSize` property removed
 
 ### Phase 6: Future Enhancements (Optional)
 
-17. **Create EdgeRenderer utility** (section 13):
+16. **Create EdgeRenderer utility** (section 12):
     - New file: `src/rendering/EdgeRenderer.ts`
     - Static utility for edge path calculation and drawing
     - Supports curved edges (bezier, splines) via EdgePath interface
@@ -1406,15 +1349,20 @@ new Connection('translation_A', [pairA.mRNA], [pairA.protein], {
 - [ ] No cached labelSize property remains (removed from Entity)
 
 ### Code Migration Completeness
-- [ ] All PhysicsEngine getDiameter() calls replaced (7 locations: 311, 381, 403, 490, 491, 535, 536)
-- [ ] All Renderer width/size calculations updated (9 locations: 192, 232, 253, 266, 280, 308, 313, 318)
-- [ ] validation.ts getDiameter() calls replaced (2 locations: 27, 34)
-- [ ] GraphManager right-click getDiameter() replaced (1 location: 621)
-- [ ] GraphManager labelSize assignment removed (section 16)
-- [ ] Entity.labelSize property removed (section 15)
-- [ ] Renderer uses LabelRenderer utility class (section 17)
-- [ ] LabelRenderer.ts created with static methods (section 14)
-- [ ] Connection.getCumulativeScale() getter added (section 6)
+- [ ] RectangleShape.draw() preserves rounded corners (section 3)
+- [ ] Connection handles width scaling directly (no EdgeShape) (section 5)
+- [ ] All PhysicsEngine getDiameter() calls replaced (7 locations: 311, 381, 403, 490, 491, 535, 536) (section 8)
+- [ ] All Renderer width/size calculations updated (9 locations: 192, 232, 253, 266, 280, 308, 313, 318) (section 9)
+- [ ] validation.ts getDiameter() calls replaced (2 locations: 27, 34) (section 10)
+- [ ] GraphManager right-click getDiameter() replaced (1 location: 621) (section 11)
+- [ ] GraphManager labelSize assignment removed (section 15)
+- [ ] Entity.labelSize property removed (section 14)
+- [ ] Renderer uses LabelRenderer utility class (section 16)
+- [ ] LabelRenderer.ts created with static methods (section 13)
+- [ ] LabelRenderer.getNodeLabelTransform() takes entity as parameter (not individual properties)
+- [ ] Connection.getCumulativeScale() getter added (section 5)
+- [ ] Entity.getCumulativeScale() already in section 4
+- [ ] Hit detection optimised to iterate visibleEntities directly (section 6)
 
 ---
 
@@ -1425,13 +1373,16 @@ new Connection('translation_A', [pairA.mRNA], [pairA.protein], {
 2. **Memory safe**: Screen sizes prevent texture blow-up (8192×8192 limit)
 3. **Scalable**: Works with arbitrary layer depths (world size inversely scales with cumulative scale)
 4. **Clean separation**:
-   - Shape = geometry + scaling logic
-   - Entity/Connection = business logic (delegates to Shape)
-   - Renderer = PixiJS orchestration (uses Shape.draw())
+   - Shape = geometry + scaling logic (for nodes with varied geometry)
+   - Entity = business logic (delegates to Shape for geometric variety)
+   - Connection = direct width scaling (no Shape needed - no geometric variety)
+   - Renderer = PixiJS orchestration (uses Shape.draw() for nodes)
 5. **User-friendly**: Normalized coordinates (radius: 1.0) instead of pixels (radius: 200)
-6. **Extensible**: Easy to add new shapes (TriangleShape, HexagonShape, etc.)
+6. **Extensible**: Easy to add new node shapes (TriangleShape, HexagonShape, etc.)
 7. **DRY principle**: Area calculation in Shape, not scattered across validation/physics/rendering
 8. **Coordinate-system agnostic**: Base scales in CONFIG, shapes in abstract space
+9. **Performance optimised**: Hit detection iterates only visible entities (avoids tree traversal + filtering)
+10. **No forced abstractions**: Connection doesn't use Shape (edges have no geometric variety)
 
 ### Label System
 1. **Single source of truth**: Font size computed on-demand (no cached `entity.labelSize` to keep in sync)
