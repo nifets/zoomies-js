@@ -27,8 +27,8 @@ export class Entity {
     selected: boolean;
     highlighted: boolean;
     alpha: number;
-    labelSize: number; // Computed label font size (base size * layer scale)
     parent: Entity | null; // Parent entity (if this entity is a child of another)
+    cumulativeScale: number; // Cumulative layer scale factor (injected by GraphManager)
     
     // Optional - only present if this entity contains children
     children: Entity[];
@@ -58,8 +58,8 @@ export class Entity {
         this.selected = false;
         this.highlighted = false;
         this.alpha = 1;
-        this.labelSize = CONFIG.LABEL_FONT_SIZE;
         this.parent = null;
+        this.cumulativeScale = 1;
 
         // Determine shape type (optional - can be overridden by layer metadata)
         this.shape = attributes.shape ?? 'circle';
@@ -92,24 +92,49 @@ export class Entity {
     }
 
     /**
-     * Recreate shape at a different scene scale (e.g., after layer scaling in GraphManager).
-     * The factory handles shape-specific parameter extraction at the new scale.
+     * Set the cumulative scale factor for this entity (layer scaling).
      */
-    recreateShapeAtScale(sceneScale: number): void {
-        this.shapeObject = ShapeFactory.createShape(this.shape as string, this.attributes, sceneScale);
+    setCumulativeScale(scale: number): void {
+        this.cumulativeScale = scale;
+    }
+
+    /**
+     * Get the cumulative scale factor.
+     */
+    getCumulativeScale(): number {
+        return this.cumulativeScale;
+    }
+
+        /**
+     * Get the world-space size (diameter).
+     */
+    getWorldSize(): number {
+        return this.shapeObject.getWorldSize(this.cumulativeScale);
+    }
+
+    /**
+     * Get the world-space area (for validation and physics).
+     */
+    getWorldArea(): number {
+        return this.shapeObject.getWorldArea(this.cumulativeScale);
+    }
+
+    /**
+     * Check if a point is inside this entity's hitbox (for click detection).
+     * COORDINATE SYSTEM: WORLD SPACE
+     */
+    containsPoint(worldPointX: number, worldPointY: number): boolean {
+        const worldSize = this.getWorldSize();
+        return this.shapeObject.containsPoint(worldPointX, worldPointY, this.x, this.y, worldSize);
     }
 
     /**
      * Updates the shape type (typically when layer metadata overrides it).
-     * Recreates the shape with the new type at current scale.
+     * Recreates the shape with the new type.
      */
     updateShapeType(newShapeType: string): void {
         this.shape = newShapeType;
-        // Get current scale from shape's diameter
-        const currentDiameter = this.shapeObject.getDiameter();
-        const relativeRadius = this.attributes.size ?? this.attributes.radius ?? CONFIG.DEFAULT_NODE_RADIUS;
-        const sceneScale = currentDiameter / 2 / relativeRadius;
-        this.recreateShapeAtScale(sceneScale);
+        this.shapeObject = ShapeFactory.createShape(newShapeType, this.attributes, 1);
     }
 
     /**

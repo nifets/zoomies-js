@@ -114,13 +114,18 @@ export class GraphManager {
                 this.zoomManager.maxZoom = scaleBar.maxZoom;
             }
             
-            // Scale entity sizes based on layer
-            // Recreate shapes at the scaled size for this layer
+            // Inject cumulative scale factors into entities (based on layer)
             for (const entity of entities) {
                 const scaleFactor = this.layerDetailManager.getNodeRadiusAtLayer(1, entity.layer);
-                entity.labelSize = CONFIG.LABEL_FONT_SIZE * scaleFactor;
-                entity.recreateShapeAtScale(scaleFactor);
+                entity.setCumulativeScale(scaleFactor);
                 console.log(`[GraphManager] Scaled ${entity.id} (L${entity.layer}): scale factor ${scaleFactor}`);
+            }
+
+            // Inject cumulative scale factors into connections (based on source layer)
+            for (const connection of connections) {
+                const layer = connection.sources[0]?.layer ?? 0;
+                const scaleFactor = this.layerDetailManager.getNodeRadiusAtLayer(1, layer);
+                connection.setCumulativeScale(scaleFactor);
             }
         }
 
@@ -516,23 +521,19 @@ export class GraphManager {
         };
 
         const getEntityAtPoint = (worldX: number, worldY: number): Entity | null => {
+            // COORDINATE SYSTEM: WORLD SPACE
             // Only check entities in visible layers (same filtering as physics and renderer)
             const visibleEntities = this.layerDetailManager.getVisibleEntities(
                 this.entities,
                 this.zoomManager.zoomLevel
             );
-            const visibleEntitySet = new Set(visibleEntities);
             
             let closest: Entity | null = null;
             let closestDist = Infinity;
             
-            for (const entity of this.getAllEntities()) {
+            // Iterate visible entities directly (performance optimization)
+            for (const entity of visibleEntities) {
                 if (entity.implicit) continue;
-                
-                // Skip entities not in visible layers
-                if (!visibleEntitySet.has(entity)) {
-                    continue;
-                }
                 
                 // Check if entity is visible (opacity > 0)
                 const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
@@ -540,8 +541,8 @@ export class GraphManager {
                     continue;
                 }
                 
-                // Check if point is inside the entity's hitbox
-                if (!entity.shapeObject.containsPoint(worldX, worldY, entity.x, entity.y)) {
+                // Check if point is inside the entity's hitbox (world space)
+                if (!entity.containsPoint(worldX, worldY)) {
                     continue;
                 }
                 
@@ -618,8 +619,8 @@ export class GraphManager {
 
             for (const composite of this.getAllComposites()) {
                 const dist = Math.hypot(composite.x - worldX, composite.y - worldY);
-                const diameter = composite.shapeObject.getDiameter();
-                const radius = diameter / 2;
+                const worldSize = composite.getWorldSize();
+                const radius = worldSize / 2;
                 if (dist < radius * 1.5 * 2) {
                     if (composite.collapsed) {
                         this.expandEntity(composite);
@@ -680,7 +681,6 @@ export class GraphManager {
         this.updateVisibility();
         this.updatePhysicsForVisibleLayers();
         this.updateZoomDebug();
-        this.renderer.clear();
 
         // Get visible entities at current zoom (same filtering as physics engine)
         const visibleEntities = this.layerDetailManager.getVisibleEntities(
@@ -769,9 +769,6 @@ export class GraphManager {
                 }
             }
         }
-
-        // Render the scene
-        this.renderer.render();
     }
 
     /**

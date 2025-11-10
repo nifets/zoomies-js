@@ -1,28 +1,58 @@
+import { CONFIG } from '../config';
+
 /**
  * Abstract base class for node shapes.
  * Encapsulates geometry calculations for different shape types.
- * Subclasses should store all shape-specific parameters internally.
- * All dimensions are in scene/world scale.
+ * Subclasses store all shape-specific parameters internally in normalized coordinates.
+ * Shape is responsible for converting normalized → world space using CONFIG.BASE_UNIT_TO_PIXELS.
  */
 export abstract class Shape {
     /**
-     * Get the diameter (bounding size) of this shape.
-     * Used for physics, spacing, and label positioning.
-     * For circles: 2 * radius. For rectangles: diagonal distance from center to corner.
+     * Get normalized diameter/bounding size (in abstract coordinate space).
      */
     abstract getDiameter(): number;
 
     /**
+     * Get the normalized area of this shape (in abstract coordinate space).
+     */
+    abstract getArea(): number;
+    /**
+     * Get the normalized area of this shape (in abstract coordinate space).
+     * For circles: π × r². For rectangles: w × h.
+
+    /**
+     * Get the world-space size (for physics simulation).
+     * Shape computes this from its normalized dimensions and cumulative scale.
+     * @param cumulativeScale - Cumulative layer scale factor
+     */
+    getWorldSize(cumulativeScale: number): number {
+        return (this.getDiameter() * CONFIG.BASE_UNIT_TO_PIXELS) / cumulativeScale;
+    }
+
+    /**
+     * Get world-space area (for validation, composite sizing).
+     * Area scales with size squared.
+     * @param cumulativeScale - Cumulative layer scale factor
+     */
+    getWorldArea(cumulativeScale: number): number {
+        const normalizedArea = this.getArea();
+        const scaleFactor = CONFIG.BASE_UNIT_TO_PIXELS / cumulativeScale;
+        return normalizedArea * scaleFactor * scaleFactor;
+    }
+
+    /**
      * Draw this shape on a graphics context (for rendering).
      * Subclasses implement shape-specific drawing logic.
+     * @param screenSize - The screen-space size for rendering
      */
-    abstract draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number): void;
+    abstract draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number, screenSize: number): void;
 
     /**
      * Draw border/stroke for this shape.
      * Subclasses implement shape-specific stroke logic.
+     * @param screenSize - The screen-space size for rendering borders
      */
-    abstract drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean): void;
+    abstract drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean, screenSize: number): void;
 
     /**
      * Get a random point inside the shape.
@@ -31,63 +61,76 @@ export abstract class Shape {
 
     /**
      * Get the border intersection point when drawing a line from center toward target.
+     * All coordinates are in world space.
+     * @param worldSize The world-space size (diameter) of the shape
      */
     abstract getBorderPoint(
         centerX: number,
         centerY: number,
         targetX: number,
-        targetY: number
+        targetY: number,
+        worldSize: number
     ): { x: number; y: number };
 
     /**
-     * Check if a point is inside the shape (for boundary enforcement).
+     * Check if a point is inside the shape (world-space coordinates).
+     * COORDINATE SYSTEM: WORLD SPACE
+     * @param worldSize The size (diameter) of the shape in world coordinates
      */
     abstract isInside(
-        pointX: number,
-        pointY: number,
-        centerX: number,
-        centerY: number
+        worldPointX: number,
+        worldPointY: number,
+        worldCenterX: number,
+        worldCenterY: number,
+        worldSize: number
     ): boolean;
 
     /**
      * Check if a point is within the interactive hitbox of the shape (for clicking).
-     * Can be larger than visual bounds for better UX. Defaults to isInside.
+     * COORDINATE SYSTEM: WORLD SPACE
+     * Can be larger than visual bounds for better UX (10% larger).
+     * @param worldSize The size (diameter) of the shape in world coordinates
      */
     containsPoint(
-        pointX: number,
-        pointY: number,
-        centerX: number,
-        centerY: number
+        worldPointX: number,
+        worldPointY: number,
+        worldCenterX: number,
+        worldCenterY: number,
+        worldSize: number
     ): boolean {
-        return this.isInside(pointX, pointY, centerX, centerY);
+        const expandedWorldSize = worldSize * 1.1;
+        return this.isInside(worldPointX, worldPointY, worldCenterX, worldCenterY, expandedWorldSize);
     }
 
     /**
      * Enforce boundary constraint - teleport point back inside if outside.
+     * COORDINATE SYSTEM: WORLD SPACE
+     * @param worldSize The size (diameter) of the boundary shape in world coordinates
      */
     enforceConstraint(
-        pointX: number,
-        pointY: number,
+        worldPointX: number,
+        worldPointY: number,
         vx: number,
         vy: number,
-        centerX: number,
-        centerY: number,
+        worldCenterX: number,
+        worldCenterY: number,
+        worldSize: number,
         margin: number = 0.9
     ): { x: number; y: number; vx: number; vy: number } | null {
-        if (this.isInside(pointX, pointY, centerX, centerY)) {
+        if (this.isInside(worldPointX, worldPointY, worldCenterX, worldCenterY, worldSize)) {
             return null; // No correction needed
         }
 
         // Get border point in this direction
-        const border = this.getBorderPoint(centerX, centerY, pointX, pointY);
+        const border = this.getBorderPoint(worldCenterX, worldCenterY, worldPointX, worldPointY, worldSize);
         
         // Apply margin (slightly inside border)
-        const dx = border.x - centerX;
-        const dy = border.y - centerY;
+        const dx = border.x - worldCenterX;
+        const dy = border.y - worldCenterY;
         
         return {
-            x: centerX + dx * margin,
-            y: centerY + dy * margin,
+            x: worldCenterX + dx * margin,
+            y: worldCenterY + dy * margin,
             vx: vx * -0.5, // Reflect and dampen velocity
             vy: vy * -0.5
         };

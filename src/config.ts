@@ -6,8 +6,13 @@
 export const CONFIG = {
     // ============ RENDERING ============
     
-    // Default node size (radius in pixels at optimal zoom)
-    DEFAULT_NODE_RADIUS: 200,
+    // Base scale: converts normalized units (1.0 = standard shape) to pixels
+    // A shape with normalized size 1.0 renders as this many pixels (before layer/camera scaling)
+    BASE_UNIT_TO_PIXELS: 50,
+    
+    // Edge width scaling factor (multiplier applied to edge widths)
+    // Reduce this if edges appear too thick relative to nodes
+    EDGE_WIDTH_SCALE: 0.2,
     
     // Detail state styling
     DETAIL_BACKGROUND_OPACITY_TRANSPARENT: 0.15, // At optimal zoom
@@ -16,7 +21,16 @@ export const CONFIG = {
     DETAIL_SHOW_BORDER_THRESHOLD: 0.3,            // Show border when detail > this
     
     // Label font size (base, before layer scaling)
-    LABEL_FONT_SIZE: 72,
+    LABEL_FONT_SIZE: 70,
+    
+    // Label texture resolution (higher = crisper text, but more memory)
+    LABEL_TEXTURE_RESOLUTION: 4.0,
+    
+    // Node border stroke width (in pixels)
+    NODE_BORDER_WIDTH: 12,
+    
+    // Node border stroke width when selected (in pixels)
+    NODE_BORDER_WIDTH_SELECTED: 16,
     
     // ============ ZOOM & SCALE ============
     

@@ -308,8 +308,8 @@ export class PhysicsEngine {
                         
                         if (dist > 0) {
                             // Stronger parent attraction - child should primarily be attracted to parent
-                            const diameter = entity.shapeObject.getDiameter();
-                            const sizeScale = diameter / 2 / CONFIG.DEFAULT_NODE_RADIUS;
+                            const worldSize = entity.getWorldSize();
+                            const sizeScale = worldSize / 2 / CONFIG.BASE_UNIT_TO_PIXELS;
                             const force = dist * this.config.centerAttractionStrength * 0.5; // 50% of normal strength
                             entity.vx += (dx / dist) * force;
                             entity.vy += (dy / dist) * force;
@@ -378,7 +378,7 @@ export class PhysicsEngine {
             if (!entity.parent || !entity.parent.isComposite()) {
                 centerX += entity.x;
                 centerY += entity.y;
-                avgRadius += entity.shapeObject.getDiameter() / 2;
+                avgRadius += entity.getWorldSize() / 2;
                 topLevelCount++;
             }
         }
@@ -400,7 +400,7 @@ export class PhysicsEngine {
             const dy = centerY - entity.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist > 0) {
-                const radius = entity.shapeObject.getDiameter() / 2;
+                const radius = entity.getWorldSize() / 2;
                 const sizeScale = (radius + avgRadius) / (2 * avgRadius);
                 const force = dist * this.config.centerAttractionStrength * sizeScale;
                 entity.vx += (dx / dist) * force;
@@ -426,12 +426,14 @@ export class PhysicsEngine {
 
 
     /**
-     * Hard boundary constraint - teleport child back inside if it escapes.
+     * Hard boundary constraint - teleport child back inside if escapes.
      */
     private enforceCompositeBoundary(child: Entity, composite: Entity): void {
+        const worldSize = composite.getWorldSize();
         const result = composite.shapeObject.enforceConstraint(
             child.x, child.y, child.vx, child.vy,
             composite.x, composite.y,
+            worldSize,
             this.config.boundaryMargin
         );
         
@@ -487,14 +489,14 @@ export class PhysicsEngine {
         const dist = Math.sqrt(distSq);
 
         // Minimum distance based on node sizes
-        const aRadius = a.shapeObject.getDiameter() / 2;
-        const bRadius = b.shapeObject.getDiameter() / 2;
+        const aRadius = a.getWorldSize() / 2;
+        const bRadius = b.getWorldSize() / 2;
         const minDist = (aRadius + bRadius) * this.config.minNodeDistanceMultiplier;
         
         // Size scale factor: average of their radii relative to a reference
         // This makes forces proportional to node mass/size
         const avgRadius = (aRadius + bRadius) / 2;
-        const sizeScale = avgRadius / CONFIG.DEFAULT_NODE_RADIUS;
+        const sizeScale = avgRadius / CONFIG.BASE_UNIT_TO_PIXELS;
 
         // Apply strong repulsion when nodes are too close (overlapping region)
         if (dist < minDist) {
@@ -532,8 +534,8 @@ export class PhysicsEngine {
         const dist = Math.sqrt(dx * dx + dy * dy);
         
         // Minimum distance - don't pull nodes closer than this
-        const aRadius = a.shapeObject.getDiameter() / 2;
-        const bRadius = b.shapeObject.getDiameter() / 2;
+        const aRadius = a.getWorldSize() / 2;
+        const bRadius = b.getWorldSize() / 2;
         const minDist = (aRadius + bRadius) * this.config.minNodeDistanceMultiplier;
         
         // Only apply attraction if distance is greater than minimum
@@ -546,7 +548,7 @@ export class PhysicsEngine {
         
         // Size scale factor: average radius relative to reference
         const avgRadius = (aRadius + bRadius) / 2;
-        const sizeScale = avgRadius / CONFIG.DEFAULT_NODE_RADIUS;
+        const sizeScale = avgRadius / CONFIG.BASE_UNIT_TO_PIXELS;
         
         // Cap the attraction distance to prevent excessive forces
         const maxAttractionDistance = targetDist * 3;

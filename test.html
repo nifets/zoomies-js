@@ -102,12 +102,12 @@
                 const mRNA = new Entity(`mRNA_${geneName}`, { 
                     layer: 0,
                     colour: '#3498db',
-                    radius: 200
+                    radius: 1.0
                 });
                 const protein = new Entity(`Protein_${geneName}`, { 
                     layer: 0,
                     colour: '#e74c3c',
-                    radius: 250
+                    radius: 1.25
                 });
                 return { mRNA, protein };
             }
@@ -122,39 +122,35 @@
             const connections = [
                 new Connection('translation_A', [pairA.mRNA], [pairA.protein], {
                     colour: '#95a5a6',
-                    width: 1.5
+                    width: 0.5
                 }),
                 new Connection('translation_B', [pairB.mRNA], [pairB.protein], {
                     colour: '#95a5a6',
-                    width: 1.5
+                    width: 0.5
                 }),
                 new Connection('translation_C', [pairC.mRNA], [pairC.protein], {
                     colour: '#95a5a6',
-                    width: 1.5
+                    width: 0.5
                 }),
                 new Connection('translation_D', [pairD.mRNA], [pairD.protein], {
                     colour: '#95a5a6',
-                    width: 1.5
+                    width: 0.5
                 }),
                 // Inhibition: Protein B inhibits mRNA A
                 new Connection('inhibition_B_to_A', [pairB.protein], [pairA.mRNA], {
                     colour: '#e74c3c',
-                    width: 2
                 }),
                 // Inhibition: Protein A inhibits mRNA B
                 new Connection('inhibition_A_to_B', [pairA.protein], [pairB.mRNA], {
                     colour: '#e74c3c',
-                    width: 2
                 }),
                 // Protein B activates mRNA D
                 new Connection('activation_B_to_D', [pairB.protein], [pairD.mRNA], {
                     colour: '#2ecc71',
-                    width: 2
                 }),
                 // Protein A activates mRNA C
                 new Connection('activation_A_to_C', [pairA.protein], [pairC.mRNA], {
                     colour: '#2ecc71',
-                    width: 2
                 })
             ];
 
@@ -176,9 +172,9 @@
                     children: [pairA.mRNA, pairA.protein],
                     layer: 1,
                     colour: '#d5f4e6',
-                    width: 150,
-                    height: 120,
-                    cornerRadius: 30,
+                    width: 0.75,
+                    height: 0.6,
+                    cornerRadius: 0.15,
                     shape: 'rectangle'
                 });
 
@@ -186,9 +182,9 @@
                     children: [pairB.mRNA, pairB.protein],
                     layer: 1,
                     colour: '#d5f4e6',
-                    width: 150,
-                    height: 120,
-                    cornerRadius: 30,
+                    width: 0.75,
+                    height: 0.6,
+                    cornerRadius: 0.15,
                     shape: 'rectangle'
                 });
 
@@ -196,9 +192,9 @@
                     children: [pairC.mRNA, pairC.protein],
                     layer: 1,
                     colour: '#d5f4e6',
-                    width: 120,
-                    height: 90,
-                    cornerRadius: 20,
+                    width: 0.6,
+                    height: 0.45,
+                    cornerRadius: 0.1,
                     shape: 'rectangle'
                 });
 
@@ -206,9 +202,9 @@
                     children: [pairD.mRNA, pairD.protein],
                     layer: 1,
                     colour: '#d5f4e6',
-                    width: 120,
-                    height: 90,
-                    cornerRadius: 20,
+                    width: 0.6,
+                    height: 0.45,
+                    cornerRadius: 0.1,
                     shape: 'rectangle'
                 });
 
@@ -222,7 +218,7 @@
                         layer: 2,
                         colour: '#fadbd8',
                         shape: 'rectangle',
-                        radius: 100
+                        radius: 0.5
                     });
 
                     layer2Entities = [differentiation];

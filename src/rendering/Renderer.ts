@@ -4,6 +4,7 @@ import { Application, Graphics, Container, Text } from 'pixi.js';
 import { ZoomManager } from '../managers/ZoomManager';
 import type { DetailState, LayerDetailManager } from '../managers/LayerDetailManager';
 import { CONFIG } from '../config';
+import { LabelRenderer } from './LabelRenderer';
 
 export class Renderer {
     canvas: HTMLCanvasElement;
@@ -23,10 +24,6 @@ export class Renderer {
     layerDetailManager: LayerDetailManager | null;
     renderConfig: Record<string, any>;
     private resizeHandler: (() => void) | null;
-
-    // Zoom-based visibility thresholds
-    readonly COMPOSITE_COLLAPSE_ZOOM = 0.3; // Zoom level where children start to hide
-    readonly COMPOSITE_FULLY_COLLAPSED_ZOOM = 0.1; // Zoom level where children are completely hidden
 
     constructor(canvas: HTMLCanvasElement, zoomManager: ZoomManager | null = null, layerDetailManager: LayerDetailManager | null = null) {
         this.canvas = canvas;
@@ -63,13 +60,6 @@ export class Renderer {
             autoDensity: true,
             resolution: window.devicePixelRatio || 1,
             backgroundColor: 0xffffff,
-            // WebGPU context with limits for large scenes
-            context: {
-                requiredLimits: {
-                    maxTextureDimension2D: 8192,
-                    maxBufferSize: 268435456
-                }
-            }
         });
         console.log('[Renderer] PixiJS app initialized');
         this.app.stage.addChild(this.worldContainer);
@@ -90,6 +80,10 @@ export class Renderer {
         window.addEventListener('resize', this.resizeHandler);
     }
     
+    // ============================================================================
+    // UTILITY METHODS
+    // ============================================================================
+    
     private updateWorldTransform(): void {
         if (!this.worldContainer) return; // Guard against destroyed renderer
         this.worldContainer.position.set(this.offsetX, this.offsetY);
@@ -97,8 +91,7 @@ export class Renderer {
     }
 
     /**
-     * Calculate child node opacity based on parent composite detail state.
-     * Children fade based on whether parent shows children.
+     * Calculate child node opacity based on parent detail state.
      */
     private getChildNodeOpacity(node: Entity): number {
         if (!node.parent || node.parent.implicit) return 1.0;
@@ -114,6 +107,90 @@ export class Renderer {
         return 1.0;
     }
 
+    /**
+     * Calculate texture resolution based on cumulative scale.
+     */
+    private getTextureResolution(cumulativeScale: number): number {
+        return Math.max(1, CONFIG.LABEL_TEXTURE_RESOLUTION / cumulativeScale);
+    }
+
+    /**
+     * Create or update a text label, recreating only if resolution changed significantly.
+     */
+    private updateLabel(
+        labelMap: Map<any, Text>,
+        key: any,
+        text: string,
+        fontSize: number,
+        resolution: number
+    ): Text {
+        let label = labelMap.get(key);
+        
+        if (!label) {
+            label = new Text({
+                text,
+                style: {
+                    fontFamily: 'Arial, sans-serif',
+                    fontSize,
+                    fill: 0x000000,
+                    align: 'center'
+                },
+                resolution
+            });
+            label.anchor.set(0.5, 0.5);
+            this.labelContainer.addChild(label);
+            labelMap.set(key, label);
+        } else if (Math.abs(label.resolution - resolution) > 0.1) {
+            // Recreate label if resolution changed significantly
+            this.labelContainer.removeChild(label);
+            label.destroy();
+            label = new Text({
+                text,
+                style: {
+                    fontFamily: 'Arial, sans-serif',
+                    fontSize,
+                    fill: 0x000000,
+                    align: 'center'
+                },
+                resolution
+            });
+            label.anchor.set(0.5, 0.5);
+            this.labelContainer.addChild(label);
+            labelMap.set(key, label);
+        } else {
+            label.text = text;
+            label.style.fontSize = fontSize;
+        }
+        
+        return label;
+    }
+
+    /**
+     * Get point where edge meets node boundary (for drawing edge endpoints).
+     */
+    private getEdgeConnectionPoint(fromNode: Entity, toNode: Entity): { x: number; y: number } {
+        const worldSize = fromNode.getWorldSize();
+        return fromNode.shapeObject.getBorderPoint(fromNode.x, fromNode.y, toNode.x, toNode.y, worldSize);
+    }
+
+    /**
+     * Calculate max layer from connection sources and targets.
+     */
+    private getConnectionMaxLayer(connection: Connection): number {
+        let maxLayer = 0;
+        for (const source of connection.sources) {
+            maxLayer = Math.max(maxLayer, source.layer);
+        }
+        for (const target of connection.targets) {
+            maxLayer = Math.max(maxLayer, target.layer);
+        }
+        return maxLayer;
+    }
+
+    // ============================================================================
+    // RENDERING METHODS
+    // ============================================================================
+    
     drawNode(node: Entity, detailState?: DetailState): void {
         if (node.implicit) return;
         let graphics = this.nodeGraphics.get(node);
@@ -130,75 +207,38 @@ export class Renderer {
         graphics.alpha = finalOpacity;
         
         // Entity-level attributes take precedence over layer metadata
-        // Entity-level shape takes precedence over layer metadata
-        const nodeShape = node.shape ?? this.layerDetailManager?.getLayerEntityShape(node.layer) ?? 'circle';
-        
-        let nodeColour = node.colour ?? this.layerDetailManager?.getLayerEntityColour(node.layer) ?? '#3498db';
-        const colour = parseInt(nodeColour.replace('#', ''), 16);
+        const nodeColourStr = node.colour ?? this.layerDetailManager?.getLayerEntityColour(node.layer) ?? '#3498db';
+        const colour = parseInt(nodeColourStr.replace('#', ''), 16);
         
         // Determine background opacity from detail state
         const bgOpacity = detailState?.backgroundOpacity ?? 1.0;
         
+        // Get world size for rendering (container transform handles screen conversion)
+        const screenSize = node.getWorldSize();
+        
         // Let the shape handle its own rendering
-        node.shapeObject.draw(graphics, node.x, node.y, colour, bgOpacity);
+        node.shapeObject.draw(graphics, node.x, node.y, colour, bgOpacity, screenSize);
         
         // Draw border if detail state says to show it
         if (detailState?.showBorder ?? true) {
-            node.shapeObject.drawStroke(graphics, node.x, node.y, colour, node.selected, node.highlighted);
+            node.shapeObject.drawStroke(graphics, node.x, node.y, colour, node.selected, node.highlighted, screenSize);
         }
 
         // Label handling for both regular nodes and composites
-        let label = this.nodeLabels.get(node);
-        const targetRes = Math.max(4, this.scale * 4);
+        const labelTransform = LabelRenderer.getNodeLabelTransform(node, detailState);
+        const targetRes = this.getTextureResolution(node.cumulativeScale);
         
-        // Font size is managed by entity (same logic as shape sizing)
+        const label = this.updateLabel(
+            this.nodeLabels,
+            node,
+            node.id,
+            labelTransform.fontSize,
+            targetRes
+        );
         
-        if (!label) {
-            label = new Text({
-                text: node.id,
-                style: {
-                    fontSize: node.labelSize,
-                    fill: 0x000000,
-                    align: 'center',
-                    fontFamily: 'Arial, sans-serif'
-                },
-                resolution: targetRes
-            });
-            label.anchor.set(0.5, 0.5);
-            this.labelContainer.addChild(label);
-            this.nodeLabels.set(node, label);
-        } else if (Math.abs(label.resolution - targetRes) > 2) {
-            this.labelContainer.removeChild(label);
-            label.destroy();
-            label = new Text({
-                text: node.id,
-                style: {
-                    fontSize: node.labelSize,
-                    fill: 0x000000,
-                    align: 'center',
-                    fontFamily: 'Arial, sans-serif'
-                },
-                resolution: targetRes
-            });
-            label.anchor.set(0.5, 0.5);
-            this.labelContainer.addChild(label);
-            this.nodeLabels.set(node, label);
-        }
-        
-        const labelOffset = 20;
-        if (detailState && detailState.labelInside) {
-            label.position.set(node.x, node.y);
-        } else {
-            const diameter = node.shapeObject.getDiameter();
-            label.position.set(node.x, node.y - diameter / 2 - labelOffset);
-        }
-        
+        label.position.set(labelTransform.worldX, labelTransform.worldY);
         label.visible = true;
         label.alpha = (detailState?.opacity ?? 1.0) * node.alpha;
-    }
-
-    private getEdgeConnectionPoint(fromNode: Entity, toNode: Entity): { x: number; y: number } {
-        return fromNode.shapeObject.getBorderPoint(fromNode.x, fromNode.y, toNode.x, toNode.y);
     }
 
     drawConnection(connection: Connection, detailState?: DetailState): void {
@@ -216,20 +256,13 @@ export class Renderer {
         const opacity = detailState ? detailState.opacity : 1;
         graphics.alpha = connection.alpha * opacity;
         
-        // Connection-level colour takes precedence over layer metadata
-        // Only use layer metadata if connection didn't explicitly specify the colour
-        let maxLayer = 0;
-        for (const source of connection.sources) {
-            maxLayer = Math.max(maxLayer, source.layer);
-        }
-        for (const target of connection.targets) {
-            maxLayer = Math.max(maxLayer, target.layer);
-        }
+        const maxLayer = this.getConnectionMaxLayer(connection);
         const edgeColourStr = connection.attributes.colour ?? this.layerDetailManager?.getLayerEdgeColour(maxLayer) ?? '#95a5a6';
         const colour = parseInt(edgeColourStr.replace('#', ''), 16);
         
-        // Edge width is not scaled by layer - camera zoom handles all scaling
-        const width = connection.attributes.width ?? 2;
+        // Get world-space width for rendering (container transform handles screen conversion)
+        const width = connection.getWorldWidth();
+        const currentZoom = this.zoomManager?.zoomLevel ?? 0;
 
         // Check if this is a synthetic edge between composites
         if (connection.attributes.synthetic && connection.subEdges.length > 0) {
@@ -255,9 +288,6 @@ export class Renderer {
             // Draw branching edges from source composite to each source child node
             for (const childNode of sourceNodes) {
                 const childEdgePoint = this.getEdgeConnectionPoint(childNode, target);
-                
-                // Use child node's opacity for branching edges
-                const currentZoom = this.zoomManager?.zoomLevel ?? 0;
                 const childDetailState = this.layerDetailManager?.getDetailStateAtZoom(childNode, currentZoom) || { opacity: 1 };
                 const branchAlpha = childDetailState.opacity * 0.6;
                 
@@ -269,9 +299,6 @@ export class Renderer {
             // Draw branching edges from target composite to each target child node
             for (const childNode of targetNodes) {
                 const childEdgePoint = this.getEdgeConnectionPoint(childNode, source);
-                
-                // Use child node's opacity for branching edges
-                const currentZoom = this.zoomManager?.zoomLevel ?? 0;
                 const childDetailState = this.layerDetailManager?.getDetailStateAtZoom(childNode, currentZoom) || { opacity: 1 };
                 const branchAlpha = childDetailState.opacity * 0.6;
                 
@@ -297,8 +324,6 @@ export class Renderer {
                         const targetCompositeEntry = this.getEdgeConnectionPoint(targetParent, sourceParent);
                         const targetNodeEdgePoint = this.getEdgeConnectionPoint(target, sourceParent);
                         
-                        // Get current zoom for detail state
-                        const currentZoom = this.zoomManager?.zoomLevel ?? 0;
                         const sourceDetailState = this.layerDetailManager?.getDetailStateAtZoom(source, currentZoom) || { opacity: 1 };
                         const targetDetailState = this.layerDetailManager?.getDetailStateAtZoom(target, currentZoom) || { opacity: 1 };
                         
@@ -338,58 +363,21 @@ export class Renderer {
      * Draw a label for a connection at its midpoint.
      */
     private drawConnectionLabel(connection: Connection, opacity: number = 1): void {
-        if (connection.sources.length === 0 || connection.targets.length === 0) return;
+        const labelTransform = LabelRenderer.getEdgeLabelTransform(connection);
+        if (!labelTransform) return;
         
-        const source = connection.sources[0];
-        const target = connection.targets[0];
+        const sourceResolution = this.getTextureResolution(connection.sources[0].cumulativeScale);
+        const label = this.updateLabel(
+            this.edgeLabels,
+            connection,
+            connection.attributes.label || connection.id,
+            labelTransform.fontSize,
+            sourceResolution
+        );
         
-        // Calculate midpoint between source and target
-        const start = this.getEdgeConnectionPoint(source, target);
-        const end = this.getEdgeConnectionPoint(target, source);
-        const midX = (start.x + end.x) / 2;
-        const midY = (start.y + end.y) / 2;
-        
-        // Dynamic resolution based on zoom
-        const targetRes = Math.max(4, this.scale * 4);
-        
-        // Get or create label text
-        let label = this.edgeLabels.get(connection);
-        if (!label) {
-            label = new Text({
-                text: connection.attributes.label || connection.id,
-                style: {
-                    fontFamily: 'Arial, sans-serif',
-                    fontSize: 10,
-                    fill: 0x333333,
-                    align: 'center'
-                },
-                resolution: targetRes
-            });
-            label.anchor.set(0.5, 0.5);
-            this.labelContainer.addChild(label);
-            this.edgeLabels.set(connection, label);
-        } else if (Math.abs(label.resolution - targetRes) > 2) {
-            // Recreate label if resolution changed significantly
-            this.labelContainer.removeChild(label);
-            label.destroy();
-            label = new Text({
-                text: connection.attributes.label || connection.id,
-                style: {
-                    fontFamily: 'Arial, sans-serif',
-                    fontSize: 10,
-                    fill: 0x333333,
-                    align: 'center'
-                },
-                resolution: targetRes
-            });
-            label.anchor.set(0.5, 0.5);
-            this.labelContainer.addChild(label);
-            this.edgeLabels.set(connection, label);
-        }
-        
-        label.text = connection.attributes.label || connection.id;
-        label.x = midX;
-        label.y = midY;
+        label.x = labelTransform.worldX;
+        label.y = labelTransform.worldY;
+        label.rotation = labelTransform.rotation ?? 0;
         label.alpha = connection.alpha * opacity;
     }
 
@@ -405,17 +393,11 @@ export class Renderer {
         }
     }
 
-    clear(): void {
-        // Don't remove graphics, just clear them - they'll be redrawn
-    }
-
-    render(): void {
-        // PixiJS v8 auto-renders, no need to call render manually
-        // The app.ticker handles rendering automatically
-    }
+    // ============================================================================
+    // PUBLIC API METHODS
+    // ============================================================================
 
     setCamera(scale: number, offsetX: number, offsetY: number): void {
-        if (!this.worldContainer) return; // Guard against destroyed renderer
         this.scale = scale;
         this.offsetX = offsetX;
         this.offsetY = offsetY;
@@ -430,19 +412,19 @@ export class Renderer {
     }
 
     destroy(): void {
-        // Remove resize listener first
+        // Remove resize listener
         if (this.resizeHandler) {
             window.removeEventListener('resize', this.resizeHandler);
             this.resizeHandler = null;
         }
         
-        // Clear maps first
+        // Clear maps
         this.nodeGraphics.clear();
         this.connectionGraphics.clear();
         this.nodeLabels.clear();
         this.edgeLabels.clear();
         
-        // Destroy containers (which will destroy all children)
+        // Destroy worldContainer (which destroys all children)
         try {
             if (this.worldContainer) {
                 this.worldContainer.removeChildren();
@@ -452,31 +434,7 @@ export class Renderer {
             console.error('Error destroying worldContainer:', e);
         }
         
-        try {
-            if (this.connectionContainer) {
-                this.connectionContainer.destroy();
-            }
-        } catch (e) {
-            console.error('Error destroying connectionContainer:', e);
-        }
-        
-        try {
-            if (this.nodeContainer) {
-                this.nodeContainer.destroy();
-            }
-        } catch (e) {
-            console.error('Error destroying nodeContainer:', e);
-        }
-        
-        try {
-            if (this.labelContainer) {
-                this.labelContainer.destroy();
-            }
-        } catch (e) {
-            console.error('Error destroying labelContainer:', e);
-        }
-        
-        // Destroy the PixiJS app completely to release WebGPU resources
+        // Destroy the PixiJS app
         if (this.app) {
             try {
                 this.app.destroy();

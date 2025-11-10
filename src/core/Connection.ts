@@ -1,4 +1,5 @@
 import { Entity } from './Entity';
+import { CONFIG } from '../config';
 
 /**
  * Metadata about a sub-edge within a merged connection.
@@ -31,6 +32,8 @@ export class Connection {
     alpha: number;
     detailConnections?: Connection[]; // Lower-level connections this summarizes
     subEdges: SubEdge[]; // Metadata about user vs synthetic edges that make up this connection
+    normalizedWidth: number; // Width in normalized coordinates
+    cumulativeScale: number; // Cumulative layer scale factor (injected by GraphManager)
 
     constructor(
         id: string,
@@ -48,6 +51,8 @@ export class Connection {
         this.alpha = 1;
         this.detailConnections = attributes.detailConnections;
         this.subEdges = [];
+        this.normalizedWidth = attributes.width ?? 1.0;
+        this.cumulativeScale = 1.0;
 
         // Filter out implicit entities
         this.sources = this.sources.filter(e => !e.implicit);
@@ -102,6 +107,28 @@ export class Connection {
      */
     unhighlight(): void {
         this.highlighted = false;
+    }
+
+    /**
+     * Inject cumulative layer scale from GraphManager.
+     */
+    setCumulativeScale(scale: number): void {
+        this.cumulativeScale = scale;
+    }
+
+    /**
+     * Get cached cumulative layer scale (for label rendering).
+     */
+    getCumulativeScale(): number {
+        return this.cumulativeScale;
+    }
+
+    /**
+     * Get the world-space width (for physics and rendering).
+     * Edges scale the same way as nodes: (normalizedWidth × BASE_UNIT_TO_PIXELS × EDGE_WIDTH_SCALE) / cumulativeScale
+     */
+    getWorldWidth(): number {
+        return (this.normalizedWidth * CONFIG.BASE_UNIT_TO_PIXELS * CONFIG.EDGE_WIDTH_SCALE) / this.cumulativeScale;
     }
 
     /**

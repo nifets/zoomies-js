@@ -1,10 +1,11 @@
 import { Shape } from './Shape';
+import { CONFIG } from '../config';
 
 export class RectangleShape extends Shape {
     constructor(
-        public width: number,
-        public height: number,
-        public cornerRadius: number = 0
+        private normalizedWidth: number,
+        private normalizedHeight: number,
+        private normalizedCornerRadius: number = 0
     ) {
         super();
     }
@@ -14,41 +15,52 @@ export class RectangleShape extends Shape {
     }
 
     getCornerRadius(): number {
-        return this.cornerRadius;
+        return this.normalizedCornerRadius;
     }
 
     getWidth(): number {
-        return this.width;
+        return this.normalizedWidth;
     }
 
     getHeight(): number {
-        return this.height;
+        return this.normalizedHeight;
+    }
+
+    getArea(): number {
+        return this.normalizedWidth * this.normalizedHeight;
     }
 
     getDiameter(): number {
-        // Diagonal distance from center to corner times 2 (for bounding)
-        return Math.sqrt((this.width / 2) ** 2 + (this.height / 2) ** 2) * 2;
+        // Bounding circle diameter
+        return Math.sqrt(this.normalizedWidth ** 2 + this.normalizedHeight ** 2);
     }
 
     getRandomInteriorPoint(centerX: number, centerY: number): { x: number; y: number } {
-        const hw = this.width / 2;
-        const hh = this.height / 2;
+        const hw = this.normalizedWidth / 2;
+        const hh = this.normalizedHeight / 2;
         const x = centerX + (Math.random() - 0.5) * hw * 1.4;
         const y = centerY + (Math.random() - 0.5) * hh * 1.4;
         return { x, y };
     }
 
-    getBorderPoint(centerX: number, centerY: number, targetX: number, targetY: number): { x: number; y: number } {
+    getBorderPoint(centerX: number, centerY: number, targetX: number, targetY: number, worldSize: number): { x: number; y: number } {
         const dx = targetX - centerX;
         const dy = targetY - centerY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist === 0) return { x: centerX, y: centerY };
 
+        // Scale normalized dimensions to world space
+        const normalizedDiameter = this.getDiameter();
+        const scale = worldSize / normalizedDiameter;
+        const worldWidth = this.normalizedWidth * scale;
+        const worldHeight = this.normalizedHeight * scale;
+        const worldCornerRadius = this.normalizedCornerRadius * scale;
+
         const ndx = dx / dist;
         const ndy = dy / dist;
-        const hw = this.width / 2;
-        const hh = this.height / 2;
-        const r = this.cornerRadius;
+        const hw = worldWidth / 2;
+        const hh = worldHeight / 2;
+        const r = worldCornerRadius;
 
         // Calculate intersection with rectangle (ignoring rounded corners first)
         const tx = hw / Math.abs(ndx);
@@ -91,27 +103,44 @@ export class RectangleShape extends Shape {
         return { x: px, y: py };
     }
 
-    isInside(pointX: number, pointY: number, centerX: number, centerY: number): boolean {
-        const hw = this.width / 2;
-        const hh = this.height / 2;
-        return Math.abs(pointX - centerX) <= hw && Math.abs(pointY - centerY) <= hh;
+    isInside(
+        worldPointX: number,
+        worldPointY: number,
+        worldCenterX: number,
+        worldCenterY: number,
+        worldSize: number
+    ): boolean {
+        // worldSize is the diameter - scale normalized dimensions proportionally
+        const normalizedDiameter = this.getDiameter();
+        const scale = worldSize / normalizedDiameter;
+        const worldWidth = this.normalizedWidth * scale;
+        const worldHeight = this.normalizedHeight * scale;
+        
+        const worldDx = worldPointX - worldCenterX;
+        const worldDy = worldPointY - worldCenterY;
+        
+        return Math.abs(worldDx) <= worldWidth / 2 && Math.abs(worldDy) <= worldHeight / 2;
     }
 
-    containsPoint(pointX: number, pointY: number, centerX: number, centerY: number): boolean {
-        const hw = this.width / 2 * 1.15;
-        const hh = this.height / 2 * 1.15;
-        return Math.abs(pointX - centerX) <= hw && Math.abs(pointY - centerY) <= hh;
-    }
-
-    draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number): void {
-        graphics.roundRect(x - this.width / 2, y - this.height / 2, this.width, this.height, this.cornerRadius);
+    draw(graphics: any, x: number, y: number, colour: number, bgOpacity: number, screenSize: number): void {
+        const aspectRatio = this.normalizedWidth / this.normalizedHeight;
+        const screenHeight = screenSize / Math.sqrt(1 + aspectRatio * aspectRatio);
+        const screenWidth = screenHeight * aspectRatio;
+        const screenCornerRadius = this.normalizedCornerRadius * (screenWidth / this.normalizedWidth);
+        
+        graphics.roundRect(x - screenWidth / 2, y - screenHeight / 2, screenWidth, screenHeight, screenCornerRadius);
         graphics.fill({ color: colour, alpha: bgOpacity });
     }
 
-    drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean): void {
-        graphics.roundRect(x - this.width / 2, y - this.height / 2, this.width, this.height, this.cornerRadius);
+    drawStroke(graphics: any, x: number, y: number, colour: number, isSelected: boolean, isHighlighted: boolean, screenSize: number): void {
+        const aspectRatio = this.normalizedWidth / this.normalizedHeight;
+        const screenHeight = screenSize / Math.sqrt(1 + aspectRatio * aspectRatio);
+        const screenWidth = screenHeight * aspectRatio;
+        const screenCornerRadius = this.normalizedCornerRadius * (screenWidth / this.normalizedWidth);
+        
+        graphics.roundRect(x - screenWidth / 2, y - screenHeight / 2, screenWidth, screenHeight, screenCornerRadius);
         const strokeColour = isSelected ? 0xf39c12 : (isHighlighted ? 0xe74c3c : colour);
-        const strokeWidth = isSelected ? 3 : 2;
+        const strokeWidth = isSelected ? CONFIG.NODE_BORDER_WIDTH_SELECTED : CONFIG.NODE_BORDER_WIDTH;
         graphics.stroke({ color: strokeColour, width: strokeWidth });
     }
 }
