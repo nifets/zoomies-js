@@ -15,16 +15,14 @@ export const CONFIG = {
     EDGE_WIDTH_SCALE: 0.05,
     
     // Detail state styling
-    DETAIL_BACKGROUND_OPACITY_TRANSPARENT: 0.15, // At optimal zoom
-    DETAIL_BACKGROUND_OPACITY_OPAQUE: 1.0,       // When zoomed out
-    DETAIL_LABEL_INSIDE_THRESHOLD: 0.5,           // Show label inside when detail > this
-    DETAIL_SHOW_BORDER_THRESHOLD: 0.3,            // Show border when detail > this
+    DETAIL_BACKGROUND_OPACITY_EXPANDED: 0.2,    // Expanded nodes: transparent background
+    DETAIL_BACKGROUND_OPACITY_COLLAPSED: 1.0,   // Collapsed nodes: opaque background
     
     // Label font size (base, before layer scaling)
-    LABEL_FONT_SIZE: 32,
+    LABEL_FONT_SIZE: 28,
     
     // Edge label font size scaling (multiplier relative to node labels)
-    EDGE_LABEL_FONT_SCALE: 0.66,
+    EDGE_LABEL_FONT_SCALE: 0.5,
     
     // Edge label offset perpendicular to edge (in normalized units)
     EDGE_LABEL_OFFSET: -12,
@@ -44,39 +42,37 @@ export const CONFIG = {
     // Must be > fadeDistance * 2
     SCALE_BAR_BUFFER_MULTIPLIER: 2.5,  // Multiplied by fadeDistance
     
-    // Fade range multiplier: how far from optimal can you see a layer before it fades
-    // Visibility range = fadeDistance * FADE_RANGE_MULTIPLIER
-    // Increase to see adjacent layers smoothly across more zoom range
-    FADE_RANGE_MULTIPLIER: 1.0,
-    
     // Default layer scale factor (L1 is 3× L0, L2 is 3× L1, etc.)
     DEFAULT_LAYER_SCALE_FACTOR: 3,
     
-    // Zoom sensitivity (deltaY delta per scroll event)
+    // Default layer metadata (entity appearance)
+    DEFAULT_LAYER_METADATA: {
+        entityShape: 'circle',
+        entityColour: '#3498db',
+        edgeColour: '#95a5a6',
+        relativeScale: 3
+    },
     ZOOM_SCROLL_SENSITIVITY: 0.1,
     
     // ============ PHYSICS ============
     
-    PHYSICS: {
-        baseRepulsionStrength: 50,
-        targetLinkDistance: 60,
-        velocityDamping: 0.01,
-        substeps: 3,
-        minNodeDistanceMultiplier: 2,
-        overlapRepulsionStrengthMultiplier: 8.0,
-        moderateDistanceRepulsionStrengthMultiplier: 1.0,
-        moderateDistanceThresholdMultiplier: 2,
-        centerAttractionStrength: 0.1,
-        edgeAttractionStrength: 0.1,
-        branchingEdgeAttractionStrength: 0.0,
-        boundaryMargin: 0.9,
-        minVelocityThreshold: 0.05,
-        maxVelocityCap: 3,
-        initialPositionRange: 400,
-        initialVelocityRange: 1,
-        // Reference radius for physics calculations (for scaling forces by size)
-        REFERENCE_RADIUS: 15
-    },
+    BASE_REPULSION_STRENGTH: 1,
+    TARGET_LINK_DISTANCE: 60,
+    VELOCITY_DAMPING: 0.01,
+    PHYSICS_SUBSTEPS: 3,
+    MIN_NODE_DISTANCE_MULTIPLIER: 2,
+    OVERLAP_REPULSION_STRENGTH_MULTIPLIER: 10000.0,
+    MODERATE_DISTANCE_THRESHOLD_MULTIPLIER: 2,
+    CENTER_ATTRACTION_STRENGTH: 0.1,
+    EDGE_ATTRACTION_STRENGTH: 0.1,
+    BRANCHING_EDGE_ATTRACTION_STRENGTH: 0.0,
+    BOUNDARY_MARGIN: 0.9,
+    BOUNDARY_REPULSION_STRENGTH: 10.0,  // Soft repulsion when child approaches parent boundary
+    MIN_VELOCITY_THRESHOLD: 0.05,
+    MAX_VELOCITY_CAP: 3,
+    INITIAL_POSITION_RANGE: 400,
+    INITIAL_VELOCITY_RANGE: 1,
+    REFERENCE_RADIUS: 15,
     
     // ============ DEBUG ============
     

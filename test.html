@@ -136,10 +136,6 @@
                     colour: '#95a5a6',
                     width: 0.8
                 }),
-                new Connection('translation_D', [pairD.mRNA], [pairD.protein], {
-                    colour: '#95a5a6',
-                    width: 0.8
-                }),
                 // Inhibition: Protein B inhibits mRNA A
                 new Connection('inhibition_B_to_A', [pairB.protein], [pairA.mRNA], {
                     colour: '#e74c3c',
@@ -147,10 +143,6 @@
                 // Inhibition: Protein A inhibits mRNA B
                 new Connection('inhibition_A_to_B', [pairA.protein], [pairB.mRNA], {
                     colour: '#e74c3c',
-                }),
-                // Protein B activates mRNA D
-                new Connection('activation_B_to_D', [pairB.protein], [pairD.mRNA], {
-                    colour: '#2ecc71',
                 }),
                 // Protein A activates mRNA C
                 new Connection('activation_A_to_C', [pairA.protein], [pairC.mRNA], {
@@ -163,7 +155,7 @@
                 pairA.mRNA, pairA.protein,
                 pairB.mRNA, pairB.protein,
                 pairC.mRNA, pairC.protein,
-                pairD.mRNA, pairD.protein
+                pairD.mRNA
             ];
 
             let layer1Entities = [];
@@ -175,7 +167,7 @@
                 const geneA = new Entity('Gene_A', {
                     children: [pairA.mRNA, pairA.protein],
                     layer: 1,
-                    colour: '#000000',
+                    colour: '#98FB98',
                     width: 1.4,
                     height: 1.1,
                     cornerRadius: 0.15,
@@ -203,7 +195,7 @@
                 });
 
                 const geneD = new Entity('Gene_D', {
-                    children: [pairD.mRNA, pairD.protein],
+                    children: [pairD.mRNA],
                     layer: 1,
                     colour: '#98FB98',
                     width: 1.2,
@@ -221,8 +213,7 @@
                         children: [geneA, geneB],
                         layer: 2,
                         colour: '#fadbd8',
-                        shape: 'rectangle',
-                        radius: 0.5
+                        shape: 'rectangle'
                     });
 
                     layer2Entities = [differentiation];

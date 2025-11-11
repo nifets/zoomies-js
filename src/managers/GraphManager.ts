@@ -3,7 +3,7 @@ import { Connection } from '../core/Connection';
 import { Renderer } from '../rendering/Renderer';
 import { InteractionManager } from './InteractionManager';
 import { ZoomManager } from './ZoomManager';
-import { PhysicsEngine, PhysicsConfig } from './PhysicsEngine';
+import { PhysicsEngine } from './PhysicsEngine';
 import { LayerDetailManager, LayerDetailConfig } from './LayerDetailManager';
 import { ZoomDebugWidget } from '../debug/ZoomDebugWidget';
 import { CONFIG } from '../config';
@@ -35,7 +35,7 @@ export class GraphManager {
     offsetStartY: number;
     renderConfig: Record<string, any>;
 
-    constructor(canvas: HTMLCanvasElement, physicsConfig?: PhysicsConfig, layerDetailConfig?: LayerDetailConfig) {
+    constructor(canvas: HTMLCanvasElement, layerDetailConfig?: LayerDetailConfig) {
         this.canvas = canvas;
         this.root = null;
         this.entities = [];
@@ -46,7 +46,7 @@ export class GraphManager {
         });
         this.renderer = new Renderer(canvas, this.zoomManager, this.layerDetailManager);
         this.interactionManager = new InteractionManager();
-        this.physicsEngine = new PhysicsEngine(physicsConfig);
+        this.physicsEngine = new PhysicsEngine();
         this.zoomDebugWidget = null;
         this.isPhysicsEnabled = false;
         this.animationFrameId = null;
@@ -711,8 +711,8 @@ export class GraphManager {
             connectionsByLayer.get(maxLayer)!.push(conn);
         }
 
-        // Get all unique layers and sort descending (highest layer first = rendered last = on top)
-        const allLayers = Array.from(new Set([...nodesByLayer.keys(), ...connectionsByLayer.keys()])).sort((a, b) => b - a);
+        // Get all unique layers and sort ascending (lowest layer first = rendered first = underneath)
+        const allLayers = Array.from(new Set([...nodesByLayer.keys(), ...connectionsByLayer.keys()])).sort((a, b) => a - b);
         
         // Get visible layers at current zoom
         const visibleLayers = this.layerDetailManager.getVisibleLayers(this.zoomManager.zoomLevel);
@@ -735,9 +735,9 @@ export class GraphManager {
             }
         }
 
-        // Draw each layer in REVERSE order (higher layers first, so they render underneath)
-        // This ensures layer 0 nodes appear on top
-        for (const layer of allLayers.reverse()) {
+        // Draw each layer in order (lowest layer first, so they render underneath)
+        // This ensures higher-layer parent nodes appear on top of lower-layer children
+        for (const layer of allLayers) {
             // Only render if layer is visible
             if (!visibleLayersSet.has(layer)) {
                 if (CONFIG.DEBUG) {

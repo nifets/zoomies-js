@@ -95,23 +95,6 @@ export class Renderer {
     }
 
     /**
-     * Calculate child node opacity based on parent detail state.
-     */
-    private getChildNodeOpacity(node: Entity): number {
-        if (!node.parent || node.parent.implicit) return 1.0;
-        
-        // Use detail state to determine if parent shows children
-        const currentZoom = this.zoomManager?.zoomLevel ?? 0;
-        const parentDetailState = this.layerDetailManager?.getDetailStateAtZoom(node.parent, currentZoom);
-        
-        if (parentDetailState) {
-            return parentDetailState.showChildren ? 1.0 : 0.0;
-        }
-        
-        return 1.0;
-    }
-
-    /**
      * Calculate texture resolution based on cumulative scale.
      */
     private getTextureResolution(cumulativeScale: number): number {
@@ -213,7 +196,7 @@ export class Renderer {
     // RENDERING METHODS
     // ============================================================================
     
-    drawNode(node: Entity, detailState?: DetailState): void {
+    drawNode(node: Entity, detailState: DetailState): void {
         if (node.implicit) return;
         let graphics = this.nodeGraphics.get(node);
         if (!graphics) {
@@ -223,10 +206,9 @@ export class Renderer {
         }
         graphics.clear();
         
-        // Use detail state opacity if provided, otherwise fall back to old method
-        const finalOpacity = detailState ? detailState.opacity * node.alpha : node.alpha * this.getChildNodeOpacity(node);
+        const finalOpacity = detailState.opacity * node.alpha;
         if (CONFIG.DEBUG) {
-            console.log(`[Renderer] drawNode ${node.id}: detailState.opacity=${detailState?.opacity}, node.alpha=${node.alpha}, finalOpacity=${finalOpacity}`);
+            console.log(`[Renderer] drawNode ${node.id}: detailState.opacity=${detailState.opacity}, node.alpha=${node.alpha}, finalOpacity=${finalOpacity}`);
         }
         graphics.alpha = finalOpacity;
         
@@ -234,8 +216,8 @@ export class Renderer {
         const nodeColourStr = node.colour ?? this.layerDetailManager?.getLayerEntityColour(node.layer) ?? '#3498db';
         const colour = parseInt(nodeColourStr.replace('#', ''), 16);
         
-        // Determine background opacity from detail state
-        const bgOpacity = detailState?.backgroundOpacity ?? 1.0;
+        // Background opacity is multiplied by overall node opacity so it fades away during transitions
+        const bgOpacity = detailState.backgroundOpacity * finalOpacity;
         
         // Get world size for rendering (container transform handles screen conversion)
         const screenSize = node.getWorldSize();
@@ -244,8 +226,13 @@ export class Renderer {
         node.shapeObject.draw(graphics, node.x, node.y, colour, bgOpacity, screenSize);
         
         // Draw border if detail state says to show it
-        if (detailState?.showBorder ?? true) {
+        if (detailState.showBorder) {
             node.shapeObject.drawStroke(graphics, node.x, node.y, colour, node.selected, node.highlighted, screenSize);
+            
+            // Apply border opacity and width
+            if (graphics.lineStyle && detailState.borderOpacity > 0) {
+                graphics.lineStyle(detailState.borderWidth, colour, detailState.borderOpacity);
+            }
         }
 
         // Label handling for both regular nodes and composites
@@ -253,7 +240,7 @@ export class Renderer {
         const targetRes = this.getTextureResolution(node.cumulativeScale);
         
         if (CONFIG.DEBUG && node.layer === 0) {
-            console.log(`[Renderer] Node ${node.id} L${node.layer}: labelInside=${detailState?.labelInside}, worldY=${labelTransform.worldY}`);
+            console.log(`[Renderer] Node ${node.id} L${node.layer}: labelInside=${detailState.labelInside}, worldY=${labelTransform.worldY}`);
         }
         
         const label = this.updateLabel(
@@ -266,10 +253,10 @@ export class Renderer {
         
         label.position.set(labelTransform.worldX, labelTransform.worldY);
         label.visible = true;
-        label.alpha = (detailState?.opacity ?? 1.0) * node.alpha;
+        label.alpha = detailState.opacity * node.alpha;
     }
 
-    drawConnection(connection: Connection, detailState?: DetailState): void {
+    drawConnection(connection: Connection, detailState: DetailState): void {
         if (connection.hidden || connection.sources.length === 0 || connection.targets.length === 0) return;
         
         let graphics = this.connectionGraphics.get(connection);
@@ -283,8 +270,8 @@ export class Renderer {
         }
         graphics.clear();
         
-        // Apply detail state opacity if provided
-        const opacity = detailState ? detailState.opacity : 1;
+        // Apply detail state opacity
+        const opacity = detailState.opacity;
         graphics.alpha = connection.alpha * opacity;
         
         const maxLayer = this.getConnectionMaxLayer(connection);
@@ -451,18 +438,6 @@ export class Renderer {
         label.y = labelTransform.worldY;
         label.rotation = labelTransform.rotation ?? 0;
         label.alpha = connection.alpha * opacity;
-    }
-
-    updatePositions(nodes: Entity[]): void {
-        for (const node of nodes) {
-            this.drawNode(node);
-        }
-    }
-
-    updateConnections(connections: Connection[]): void {
-        for (const connection of connections) {
-            this.drawConnection(connection);
-        }
     }
 
     // ============================================================================

@@ -1,63 +1,7 @@
 import { Entity } from '../core/Entity';
 import { Connection } from '../core/Connection';
 import { CONFIG } from '../config';
-
-/**
- * Physics engine configuration options.
- */
-export interface PhysicsConfig {
-    // Base physics constants
-    baseRepulsionStrength?: number;
-    targetLinkDistance?: number;
-    velocityDamping?: number;
-    
-    // Physics iterations per frame (for force propagation)
-    substeps?: number;
-    
-    // Minimum distance multipliers (relative to sum of radii)
-    minNodeDistanceMultiplier?: number;
-    
-    // Force strength multipliers for different scenarios
-    overlapRepulsionStrengthMultiplier?: number;
-    moderateDistanceRepulsionStrengthMultiplier?: number;
-    moderateDistanceThresholdMultiplier?: number;
-    
-    // Internal composite physics
-    centerAttractionStrength?: number;
-    edgeAttractionStrength?: number;
-    branchingEdgeAttractionStrength?: number;
-    boundaryMargin?: number;
-    
-    // Velocity constraints
-    minVelocityThreshold?: number;
-    maxVelocityCap?: number;
-    
-    // Random initialization ranges
-    initialPositionRange?: number;
-    initialVelocityRange?: number;
-}
-
-/**
- * Default physics configuration.
- */
-const DEFAULT_PHYSICS_CONFIG: Required<PhysicsConfig> = {
-    baseRepulsionStrength: 50,
-    targetLinkDistance: 60,
-    velocityDamping: 0.01,
-    substeps: 3,
-    minNodeDistanceMultiplier: 2,
-    overlapRepulsionStrengthMultiplier: 8.0,
-    moderateDistanceRepulsionStrengthMultiplier: 1.0,
-    moderateDistanceThresholdMultiplier: 2,
-    centerAttractionStrength: 0.1,
-    edgeAttractionStrength: 0.1,
-    branchingEdgeAttractionStrength: 0.0,
-    boundaryMargin: 0.9,
-    minVelocityThreshold: 0.05,
-    maxVelocityCap: 3,
-    initialPositionRange: 400,
-    initialVelocityRange: 1
-};
+import { ShapeComparison } from '../shapes/ShapeComparison';
 
 /**
  * Physics engine for force-directed layout.
@@ -72,10 +16,9 @@ export class PhysicsEngine {
     animationFrameId: number | null;
     pinnedNodes: Set<Entity>;
     visibleEntities: Set<Entity>;
-    config: Required<PhysicsConfig>;
     crossLayerConnections: Connection[]; // Connections between entities in different layers
 
-    constructor(config: PhysicsConfig = {}) {
+    constructor() {
         this.root = null;
         this.layers = [];
         this.connections = [];
@@ -84,9 +27,6 @@ export class PhysicsEngine {
         this.pinnedNodes = new Set();
         this.visibleEntities = new Set();
         this.crossLayerConnections = [];
-        
-        // Merge user config with defaults
-        this.config = { ...DEFAULT_PHYSICS_CONFIG, ...config };
     }
 
     /**
@@ -104,11 +44,11 @@ export class PhysicsEngine {
         for (const layer of this.layers) {
             for (const entity of layer) {
                 if (entity.x === 0 && entity.y === 0) {
-                    entity.x = Math.random() * this.config.initialPositionRange - this.config.initialPositionRange / 2;
-                    entity.y = Math.random() * this.config.initialPositionRange - this.config.initialPositionRange / 2;
+                    entity.x = Math.random() * CONFIG.INITIAL_POSITION_RANGE - CONFIG.INITIAL_POSITION_RANGE / 2;
+                    entity.y = Math.random() * CONFIG.INITIAL_POSITION_RANGE - CONFIG.INITIAL_POSITION_RANGE / 2;
                 }
-                entity.vx = (Math.random() - 0.5) * this.config.initialVelocityRange;
-                entity.vy = (Math.random() - 0.5) * this.config.initialVelocityRange;
+                entity.vx = (Math.random() - 0.5) * CONFIG.INITIAL_VELOCITY_RANGE;
+                entity.vy = (Math.random() - 0.5) * CONFIG.INITIAL_VELOCITY_RANGE;
             }
         }
     }
@@ -218,7 +158,7 @@ export class PhysicsEngine {
         if (!this.isRunning) return;
 
         // Run multiple physics iterations per frame for better force propagation
-        for (let i = 0; i < this.config.substeps; i++) {
+        for (let i = 0; i < CONFIG.PHYSICS_SUBSTEPS; i++) {
             this.simulationStep();
         }
         this.animationFrameId = requestAnimationFrame(this.animate);
@@ -304,7 +244,7 @@ export class PhysicsEngine {
                             // Stronger parent attraction - child should primarily be attracted to parent
                             const worldSize = entity.getWorldSize();
                             const sizeScale = worldSize / 2 / CONFIG.BASE_UNIT_TO_PIXELS;
-                            const force = dist * this.config.centerAttractionStrength * 0.5; // 50% of normal strength
+                            const force = dist * CONFIG.CENTER_ATTRACTION_STRENGTH * 0.5; // 50% of normal strength
                             entity.vx += (dx / dist) * force;
                             entity.vy += (dy / dist) * force;
                         }
@@ -352,8 +292,8 @@ export class PhysicsEngine {
                 const bdy = branchPoint.y - source.y;
                 const bDist = Math.sqrt(bdx * bdx + bdy * bdy);
                 
-                if (bDist > 0 && this.config.branchingEdgeAttractionStrength > 0) {
-                    const force = bDist * this.config.branchingEdgeAttractionStrength;
+                if (bDist > 0 && CONFIG.BRANCHING_EDGE_ATTRACTION_STRENGTH > 0) {
+                    const force = bDist * CONFIG.BRANCHING_EDGE_ATTRACTION_STRENGTH;
                     source.vx += (bdx / bDist) * force;
                     source.vy += (bdy / bDist) * force;
                 }
@@ -398,23 +338,36 @@ export class PhysicsEngine {
             if (dist > 0) {
                 const radius = entity.getWorldSize() / 2;
                 const sizeScale = (radius + avgRadius) / (2 * avgRadius);
-                const force = dist * this.config.centerAttractionStrength * sizeScale;
+                const force = dist * CONFIG.CENTER_ATTRACTION_STRENGTH * sizeScale;
                 entity.vx += (dx / dist) * force;
                 entity.vy += (dy / dist) * force;
             }
         }
 
-        // Step 5: Boundary constraints for composites containing children
-        // Find parent-child relationships and apply boundary constraints
+        // Step 5: Soft boundary repulsion for composites
+        // Apply repulsive force when children approach the parent boundary
         for (const entity of entities) {
             if (!entity.isComposite()) continue;
             if (!this.visibleEntities.has(entity)) continue;
             
-            // Apply boundary repulsion/constraint to its visible children
+            // Apply soft repulsion to visible children approaching boundary
             for (const child of entity.children) {
                 if (this.pinnedNodes.has(child)) continue;
                 if (!this.visibleEntities.has(child)) continue;
-                this.enforceCompositeBoundary(child, entity);
+                this.applySoftBoundaryRepulsion(child, entity);
+            }
+        }
+
+        // Step 6: Hard boundary constraint as safety net
+        // Teleport children back if they still manage to escape
+        for (const entity of entities) {
+            if (!entity.isComposite()) continue;
+            if (!this.visibleEntities.has(entity)) continue;
+            
+            for (const child of entity.children) {
+                if (this.pinnedNodes.has(child)) continue;
+                if (!this.visibleEntities.has(child)) continue;
+                this.enforceHardBoundary(child, entity);
             }
         }
     }
@@ -422,26 +375,77 @@ export class PhysicsEngine {
 
 
     /**
-     * Hard boundary constraint - teleport child back inside if escapes.
+     * Apply soft repulsive force when child approaches parent boundary.
+     * Repulsion only activates when child is meaningfully outside (beyond margin).
      */
-    private enforceCompositeBoundary(child: Entity, composite: Entity): void {
-        const worldSize = composite.getWorldSize();
-        const result = composite.shapeObject.enforceConstraint(
-            child.x, child.y, child.vx, child.vy,
-            composite.x, composite.y,
-            worldSize,
-            this.config.boundaryMargin
-        );
+    private applySoftBoundaryRepulsion(child: Entity, parent: Entity): void {
+        // Calculate how close child is to parent boundary
+        const childRadius = child.getWorldSize() / 2;
+        const parentRadius = parent.getWorldSize() / 2;
         
-        if (result) {
-            child.x = result.x;
-            child.y = result.y;
-            child.vx = result.vx;
-            child.vy = result.vy;
+        // Distance from child center to parent center
+        const dx = child.x - parent.x;
+        const dy = child.y - parent.y;
+        const distSq = dx * dx + dy * dy;
+        const dist = Math.sqrt(distSq);
+
+        if (dist < 0.001) return; // At same point, no force
+
+        // Safe zone: child should stay at least this far from parent boundary
+        const safeDistance = parentRadius * CONFIG.BOUNDARY_MARGIN - childRadius * 0.5;
+
+        // If too close to boundary, push toward center
+        if (dist > safeDistance) {
+            // Distance outside the safe zone
+            const overshoot = dist - safeDistance;
+            
+            // Repulsive force pushing toward parent center (inward)
+            const force = overshoot * CONFIG.BOUNDARY_REPULSION_STRENGTH;
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+
+            // Push child toward parent center (repulse inward from boundary)
+            child.vx -= fx;
+            child.vy -= fy;
         }
     }
 
     /**
+     * Hard boundary constraint - last-resort safety net.
+     * Only activates if child has escaped significantly despite soft repulsion.
+     * Forcibly repositions child back inside and damps outward velocity.
+     */
+    private enforceHardBoundary(child: Entity, parent: Entity): void {
+        // Check if child is still outside parent
+        if (child.isInside(parent)) return; // Inside, constraint not needed
+
+        // Child has badly escaped - this is a safety net, not normal behaviour
+        const dx = child.x - parent.x;
+        const dy = child.y - parent.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 0.001) return; // Already at centre
+
+        // Get the closest point on parent boundary
+        const borderPoint = parent.shapeObject.getBorderPoint(
+            parent.x, parent.y, child.x, child.y, parent.getWorldSize()
+        );
+
+        // Teleport child just inside boundary with safety margin
+        const childRadius = child.getWorldSize() / 2;
+        const normalX = (borderPoint.x - parent.x) / dist;
+        const normalY = (borderPoint.y - parent.y) / dist;
+
+        child.x = borderPoint.x - normalX * (childRadius * 0.1);
+        child.y = borderPoint.y - normalY * (childRadius * 0.1);
+
+        // Kill outward velocity completely
+        const outwardDot = child.vx * (dx / dist) + child.vy * (dy / dist);
+        if (outwardDot > 0) {
+            child.vx -= outwardDot * (dx / dist);
+            child.vy -= outwardDot * (dy / dist);
+        }
+    }    /**
      * Update positions for all entities in all layers.
      */
     private updatePositions(): void {
@@ -453,19 +457,19 @@ export class PhysicsEngine {
                     continue;
                 }
 
-                entity.vx *= this.config.velocityDamping;
-                entity.vy *= this.config.velocityDamping;
+                entity.vx *= CONFIG.VELOCITY_DAMPING;
+                entity.vy *= CONFIG.VELOCITY_DAMPING;
                 
                 // Cap velocity
                 const speed = Math.sqrt(entity.vx * entity.vx + entity.vy * entity.vy);
-                if (speed > this.config.maxVelocityCap) {
-                    entity.vx = (entity.vx / speed) * this.config.maxVelocityCap;
-                    entity.vy = (entity.vy / speed) * this.config.maxVelocityCap;
+                if (speed > CONFIG.MAX_VELOCITY_CAP) {
+                    entity.vx = (entity.vx / speed) * CONFIG.MAX_VELOCITY_CAP;
+                    entity.vy = (entity.vy / speed) * CONFIG.MAX_VELOCITY_CAP;
                 }
                 
                 // Zero out very small velocities
-                if (Math.abs(entity.vx) < this.config.minVelocityThreshold) entity.vx = 0;
-                if (Math.abs(entity.vy) < this.config.minVelocityThreshold) entity.vy = 0;
+                if (Math.abs(entity.vx) < CONFIG.MIN_VELOCITY_THRESHOLD) entity.vx = 0;
+                if (Math.abs(entity.vy) < CONFIG.MIN_VELOCITY_THRESHOLD) entity.vy = 0;
                 
                 entity.x += entity.vx;
                 entity.y += entity.vy;
@@ -484,21 +488,26 @@ export class PhysicsEngine {
         const distSq = dx * dx + dy * dy + 1;
         const dist = Math.sqrt(distSq);
 
-        // Minimum distance based on node sizes
-        const aRadius = a.getWorldSize() / 2;
-        const bRadius = b.getWorldSize() / 2;
-        const minDist = (aRadius + bRadius) * this.config.minNodeDistanceMultiplier;
+        // Check if shapes are overlapping using shape comparison
+        const overlapping = !ShapeComparison.isShapeInside(
+            a.shapeObject, a.x, a.y, a.getWorldSize(),
+            b.shapeObject, b.x, b.y, b.getWorldSize(),
+            1.0 // No margin for overlap check
+        ) && !ShapeComparison.isShapeInside(
+            b.shapeObject, b.x, b.y, b.getWorldSize(),
+            a.shapeObject, a.x, a.y, a.getWorldSize(),
+            1.0
+        );
         
         // Size scale factor: average of their radii relative to a reference
-        // This makes forces proportional to node mass/size
+        const aRadius = a.getWorldSize() / 2;
+        const bRadius = b.getWorldSize() / 2;
         const avgRadius = (aRadius + bRadius) / 2;
         const sizeScale = avgRadius / CONFIG.BASE_UNIT_TO_PIXELS;
 
-        // Apply strong repulsion when nodes are too close (overlapping region)
-        if (dist < minDist) {
-            const overlap = minDist - dist;
-            // Scale base repulsion by size
-            const force = (this.config.baseRepulsionStrength * multiplier * overlap * this.config.overlapRepulsionStrengthMultiplier * sizeScale) / (dist + 1e-6);
+        // Strong repulsion when shapes overlap
+        if (overlapping) {
+            const force = (CONFIG.BASE_REPULSION_STRENGTH * multiplier * CONFIG.OVERLAP_REPULSION_STRENGTH_MULTIPLIER * sizeScale) / (dist + 1e-6);
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 
@@ -506,9 +515,9 @@ export class PhysicsEngine {
             a.vy -= fy;
             b.vx += fx;
             b.vy += fy;
-        } else if (dist < minDist * this.config.moderateDistanceThresholdMultiplier) {
-            // Weaker repulsion at moderate distance, also scaled by size
-            const force = (this.config.baseRepulsionStrength * multiplier * this.config.moderateDistanceRepulsionStrengthMultiplier * sizeScale) / distSq;
+        } else if (dist < (aRadius + bRadius) * CONFIG.MODERATE_DISTANCE_THRESHOLD_MULTIPLIER) {
+            // Weaker repulsion at moderate distance
+            const force = (CONFIG.BASE_REPULSION_STRENGTH * multiplier * sizeScale) / distSq;
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 
@@ -532,7 +541,7 @@ export class PhysicsEngine {
         // Minimum distance - don't pull nodes closer than this
         const aRadius = a.getWorldSize() / 2;
         const bRadius = b.getWorldSize() / 2;
-        const minDist = (aRadius + bRadius) * this.config.minNodeDistanceMultiplier;
+        const minDist = (aRadius + bRadius) * CONFIG.MIN_NODE_DISTANCE_MULTIPLIER;
         
         // Only apply attraction if distance is greater than minimum
         if (dist <= minDist) {
@@ -540,7 +549,7 @@ export class PhysicsEngine {
         }
         
         // Target link distance scales with node sizes: size-aware equilibrium
-        const targetDist = minDist + this.config.targetLinkDistance;
+        const targetDist = minDist + CONFIG.TARGET_LINK_DISTANCE;
         
         // Size scale factor: average radius relative to reference
         const avgRadius = (aRadius + bRadius) / 2;
@@ -556,8 +565,8 @@ export class PhysicsEngine {
         
         // Choose attraction strength based on edge type
         const attractionStrength = isBranching 
-            ? this.config.branchingEdgeAttractionStrength 
-            : this.config.edgeAttractionStrength;
+            ? CONFIG.BRANCHING_EDGE_ATTRACTION_STRENGTH 
+            : CONFIG.EDGE_ATTRACTION_STRENGTH;
         
         // Spring-like attraction: pull towards target distance
         // Scale strength by node size and cumulative scale to maintain consistent behavior across layers

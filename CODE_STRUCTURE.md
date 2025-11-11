@@ -23,6 +23,9 @@
 - public setOpacity(): void
 - public highlight(): void
 - public unhighlight(): void
+- public setCumulativeScale(): void
+- public getCumulativeScale(): number
+- public getWorldWidth(): number
 - public toJSON(): Record<string, any>
 
 ---
@@ -34,14 +37,16 @@
 
 **Methods:**
 - public setPosition(): void
-- public recreateShapeAtScale(): void
+- public setCumulativeScale(): void
+- public getCumulativeScale(): number
+- public getWorldSize(): number
+- public getWorldArea(): number
+- public containsPoint(): boolean
 - public updateShapeType(): void
 - public isComposite(): boolean
 - public getAllChildren(): Entity[]
 - public getVisibleChildren(): Entity[]
 - public getLeafEntities(): Entity[]
-- public collapse(): void
-- public expand(): void
 - public updateSummaryEdges(): void
 - public setLayer(): void
 - public getVisibility(): number
@@ -60,8 +65,10 @@
 - class ZoomDebugWidget
 
 **Methods:**
-- public buildScaleBar(): void
 - public update(): void
+- private scaleToZoom(): number
+- private getPresentationModeForLayer(): PresentationMode
+- private formatModeName(): string
 - private drawScale(): void
 - public destroy(): void
 
@@ -78,9 +85,8 @@
 - public setZoom(): void
 - public getZoom(): number
 - public on(): void
-- public collapseEntity(): void
-- public expandEntity(): void
 - public toggleZoomDebug(): void
+- public showZoomDebug(): void
 - public destroy(): void
 
 ---
@@ -109,9 +115,6 @@
 - public setZoom(): void
 - public adjustZoom(): void
 - public getZoom(): number
-- public collapseEntity(): void
-- public expandEntity(): void
-- private updateSummaryEdges(): void
 - private bindInteractions(): void
 - private updateVisibility(): void
 - public update(): void
@@ -122,6 +125,8 @@
 - public getPhysicsEngine(): PhysicsEngine
 - public getLayerDetailManager(): LayerDetailManager
 - public toggleZoomDebug(): void
+- public showZoomDebug(): void
+- public setRenderConfig(): void
 - private updateZoomDebug(): void
 
 ---
@@ -150,7 +155,6 @@
 - interface LayerDetailConfig
 - interface DetailState
 - class LayerDetailManager
-- interface DetailState
 
 **Methods:**
 - public buildScaleBar(): void
@@ -158,6 +162,9 @@
 - public getPrimaryLayerAtZoom(): number
 - public getVisibleLayers(): number[]
 - public getVisibleEntities(): Entity[]
+- public determinePresentationMode(): PresentationMode
+- public getOpacityForMode(): number
+- private getCollapsingBackgroundOpacity(): number
 - public getDetailStateAtZoom(): DetailState
 - public getNodeRadiusAtLayer(): number
 - public getLayerEntityShape(): string
@@ -197,15 +204,13 @@
 ## src/managers/ScaleBar.ts
 
 **Exports:**
+- interface LayerWindowSegments
 - class ScaleBar
 
 **Methods:**
+- private computeAllLayerWindows(): void
 - public getOptimalZoomForLayer(): number
 - public getPrimaryLayerAtZoom(): number
-- public getVisibleLayers(): number[]
-- public getDistanceFromOptimal(): number
-- public isLayerVisible(): boolean
-- public getNormalisedFadeParameter(): number
 - private getLayerScale(): number
 
 ---
@@ -218,7 +223,14 @@
 **Methods:**
 - public setZoom(): void
 - private animateToTargetZoom(): void
-- public shouldAutoExpand(): boolean
+
+---
+
+## src/rendering/LabelRenderer.ts
+
+**Exports:**
+- interface LabelTransform
+- class LabelRenderer
 
 ---
 
@@ -229,17 +241,19 @@
 
 **Methods:**
 - private updateWorldTransform(): void
-- private getChildNodeOpacity(): number
-- public drawNode(): void
+- private getTextureResolution(): number
 - private getEdgeConnectionPoint(): { x: number
+- private getConnectionMaxLayer(): number
+- private isConnectionIntraLayer(): boolean
+- public drawNode(): void
 - public drawConnection(): void
-- public updatePositions(): void
-- public updateConnections(): void
-- public clear(): void
-- public render(): void
+- public removeNodeGraphics(): void
+- public removeConnectionGraphics(): void
+- private drawConnectionLabel(): void
 - public setCamera(): void
 - public getDimensions(): { width: number
 - public destroy(): void
+- public setRenderConfig(): void
 
 ---
 
@@ -250,11 +264,10 @@
 
 **Methods:**
 - public getType(): string
+- public getArea(): number
 - public getDiameter(): number
 - public getRandomInteriorPoint(): { x: number
 - public getBorderPoint(): { x: number
-- public isInside(): boolean
-- public containsPoint(): boolean
 - public draw(): void
 - public drawStroke(): void
 
@@ -270,11 +283,10 @@
 - public getCornerRadius(): number
 - public getWidth(): number
 - public getHeight(): number
+- public getArea(): number
 - public getDiameter(): number
 - public getRandomInteriorPoint(): { x: number
 - public getBorderPoint(): { x: number
-- public isInside(): boolean
-- public containsPoint(): boolean
 - public draw(): void
 - public drawStroke(): void
 
@@ -287,6 +299,9 @@
 
 **Methods:**
 - abstract public getDiameter(): number
+- abstract public getArea(): number
+- public getWorldSize(): number
+- public getWorldArea(): number
 - abstract public draw(): void
 - abstract public drawStroke(): void
 - abstract public getRandomInteriorPoint(): { x: number

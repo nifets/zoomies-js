@@ -1,22 +1,24 @@
 /**
- * Debug widget showing zoom level scale bar with explicit layer optimal positions.
- * Visualises the scale bar metaphor: each layer has an optimal viewing position,
- * spaced by log₂(relativeScale) zoom units.
+ * Debug widget showing zoom level scale bar with explicit layer segment windows.
+ * Visualises each layer's presentation mode segments (FADING_IN, EXPANDED, COLLAPSING, etc).
+ * Layers alternate above/below centre line for clarity.
  *
- * Uses the ScaleBar from LayerDetailManager to avoid duplication.
+ * Uses the ScaleBar from LayerDetailManager to display segment boundaries.
  */
-import { LayerDetailManager } from '../managers/LayerDetailManager';
+import { LayerDetailManager, PresentationMode } from '../managers/LayerDetailManager';
+import { CONFIG } from '../config';
 
 export class ZoomDebugWidget {
     container: HTMLElement;
     scaleCanvas: HTMLCanvasElement;
     zoomLabel: HTMLElement;
     layerLabel: HTMLElement;
-    scaleBarLabel: HTMLElement;
     layerDetailManager: LayerDetailManager;
+    private loggingDone: boolean = false;
 
     constructor(layerDetailManager: LayerDetailManager) {
         this.layerDetailManager = layerDetailManager;
+        this.loggingDone = false;
         this.container = document.createElement('div');
         this.container.id = 'zoom-debug-widget';
         this.container.style.cssText = `
@@ -29,7 +31,7 @@ export class ZoomDebugWidget {
             padding: 15px;
             font-family: monospace;
             color: #00ff00;
-            width: 320px;
+            width: 420px;
             z-index: 1000;
             font-size: 12px;
             line-height: 1.5;
@@ -43,19 +45,14 @@ export class ZoomDebugWidget {
 
         // Layer display
         this.layerLabel = document.createElement('div');
-        this.layerLabel.style.marginBottom = '5px';
+        this.layerLabel.style.marginBottom = '10px';
         this.layerLabel.textContent = 'Layer: 0 | Opacity: 1.0';
         this.container.appendChild(this.layerLabel);
 
-        // Scale bar info
-        this.scaleBarLabel = document.createElement('div');
-        this.scaleBarLabel.style.cssText = 'margin-bottom: 10px; font-size: 10px; opacity: 0.7;';
-        this.container.appendChild(this.scaleBarLabel);
-
         // Canvas for scale visualization
         this.scaleCanvas = document.createElement('canvas');
-        this.scaleCanvas.width = 300;
-        this.scaleCanvas.height = 100;
+        this.scaleCanvas.width = 400;
+        this.scaleCanvas.height = 200;
         this.scaleCanvas.style.cssText = `
             border: 1px solid #00ff00;
             display: block;
@@ -76,189 +73,237 @@ export class ZoomDebugWidget {
 
         const optimalZoom = scaleBar.getOptimalZoomForLayer(currentLayer);
         const distanceFromOptimal = (zoomLevel - optimalZoom).toFixed(2);
-        
-        // Calculate cumulative scale factor: zoom level determines how much things are scaled
-        // zoom=0 (L0) is base scale (×1)
-        // zoom=-log2(3) (L1) is ×3 scaled
-        // zoom=-log2(6) (L2) is ×6 scaled
         const cumulativeScale = Math.pow(2, -zoomLevel);
         const scaleLabel = cumulativeScale.toFixed(1);
         
-        this.zoomLabel.textContent = `Zoom: ${zoomLevel.toFixed(2)} (L${currentLayer}-optimal: ${optimalZoom.toFixed(2)})`;
-        this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Distance: ${distanceFromOptimal} | Scale: ×${scaleLabel}`;
+        this.zoomLabel.textContent = `Zoom: ${zoomLevel.toFixed(2)} | Scale: ×${scaleLabel}`;
+        this.layerLabel.textContent = `Layer: ${currentLayer} | Opacity: ${opacity.toFixed(2)} | Distance from optimal: ${distanceFromOptimal}`;
+
+        // Log segments in zoom coordinates for debugging (only once)
+        if (true && !this.loggingDone) {
+            this.loggingDone = true;
+            console.log('[ZoomDebugWidget] Layer segments (scale → zoom):');
+            for (const [layer] of scaleBar.layerWindowSegments) {
+                const seg = scaleBar.layerWindowSegments.get(layer as number)!;
+                const formatScale = (s: number) => isNaN(s) ? 'NaN' : (isFinite(s) ? s.toFixed(4) : (s === Infinity ? 'Inf' : '-Inf'));
+                const formatZoom = (s: number) => {
+                    if (isNaN(s)) return 'NaN';
+                    if (s === Infinity) return '+∞';
+                    if (s === -Infinity) return '-∞';
+                    return isFinite(s) ? s.toFixed(2) : 'non-finite';
+                };
+                const fadingInMinZoom = this.scaleToZoom(seg.fadingInMin);
+                const expandedMinZoom = this.scaleToZoom(seg.expandedMin);
+                const expandedMaxZoom = this.scaleToZoom(seg.expandedMax);
+                const collapsedMinZoom = this.scaleToZoom(seg.collapsedMin);
+                const collapsedMaxZoom = this.scaleToZoom(seg.collapsedMax);
+                const fadingOutMaxZoom = this.scaleToZoom(seg.fadingOutMax);
+                
+                console.log(
+                    `  L${layer}: ` +
+                    `fadingInMin=${formatScale(seg.fadingInMin)}→${formatZoom(fadingInMinZoom)}, ` +
+                    `expandedMin=${formatScale(seg.expandedMin)}→${formatZoom(expandedMinZoom)}, ` +
+                    `expandedMax=${formatScale(seg.expandedMax)}→${formatZoom(expandedMaxZoom)}, ` +
+                    `collapsedMin=${formatScale(seg.collapsedMin)}→${formatZoom(collapsedMinZoom)}, ` +
+                    `collapsedMax=${formatScale(seg.collapsedMax)}→${formatZoom(collapsedMaxZoom)}, ` +
+                    `fadingOutMax=${formatScale(seg.fadingOutMax)}→${formatZoom(fadingOutMaxZoom)}`
+                );
+            }
+        }
 
         this.drawScale(zoomLevel, minZoom, maxZoom, currentLayer, scaleBar);
     }
 
     /**
-     * Draw zoom scale bar using ScaleBar from LayerDetailManager.
-     * Each layer marker shows the optimal zoom position from the scale bar.
-     * Fade windows show visibility ranges for each layer.
+     * Convert scale coordinate to zoom coordinate.
+     * scale = 2^(-zoom), so zoom = -log2(scale)
+     * Special cases:
+     *   - scale = 0 → zoom = ∞ (zoomed out infinitely)
+     *   - scale = ∞ → zoom = -∞ (zoomed in infinitely)
+     *   - scale ≤ 0 or NaN → clamp to visible zoom range bounds
+     */
+    private scaleToZoom(scale: number): number {
+        if (isNaN(scale)) {
+            return 0; // NaN fallback
+        }
+        if (scale === 0) {
+            return Infinity; // scale 0 → zoom ∞
+        }
+        if (scale === Infinity) {
+            return -Infinity; // scale ∞ → zoom -∞
+        }
+        if (scale < 0) {
+            return 0; // Invalid negative scale
+        }
+        const zoom = -Math.log2(scale);
+        return isFinite(zoom) ? zoom : 0;
+    }
+
+    /**
+     * Get presentation mode for a layer at the current zoom level.
+     */
+    private getPresentationModeForLayer(layer: number, zoomLevel: number, scaleBar: any): PresentationMode {
+        const segments = scaleBar.layerWindowSegments.get(layer);
+        if (!segments) return PresentationMode.INVISIBLE;
+        return this.layerDetailManager.determinePresentationMode(zoomLevel, segments);
+    }
+
+    /**
+     * Format presentation mode name for display.
+     */
+    private formatModeName(mode: PresentationMode): string {
+        return mode.replace(/_/g, ' ');
+    }
+
+    /**
+     * Draw segment windows for each layer.
+     * Each layer gets its own horizontal axis, stacked vertically.
      */
     private drawScale(zoomLevel: number, minZoom: number, maxZoom: number, currentLayer: number, scaleBar: any): void {
         const ctx = this.scaleCanvas.getContext('2d')!;
         const width = this.scaleCanvas.width;
         const height = this.scaleCanvas.height;
-        const padding = 10;
-        const scaleTop = 20;
-        const scaleHeight = 12;
-        const scaleBottom = scaleTop + scaleHeight;
+        const padding = 15;
+        const zoomRange = maxZoom - minZoom;
+        const scaleRange = width - 2 * padding;
 
         // Clear
         ctx.fillStyle = 'rgba(0, 30, 0, 0.5)';
         ctx.fillRect(0, 0, width, height);
 
-        // Draw scale bar (horizontal line)
-        ctx.strokeStyle = '#00ff00';
+        // Get all layers
+        const layerArray = Array.from(scaleBar.layerWindowSegments.keys() as IterableIterator<number>).sort((a, b) => a - b);
+        const layerHeight = Math.max(40, Math.min(60, height / Math.max(1, layerArray.length)));
+        
+        // Draw each layer on its own axis
+        for (let i = 0; i < layerArray.length; i++) {
+            const layer = layerArray[i];
+            const segments = scaleBar.layerWindowSegments.get(layer);
+            if (!segments) continue;
+
+            const axisY = padding + i * layerHeight + layerHeight / 2;
+            const isCurrent = layer === currentLayer;
+
+            // Draw axis line for this layer
+            ctx.strokeStyle = isCurrent ? '#ffff00' : 'rgba(0, 255, 0, 0.3)';
+            ctx.lineWidth = isCurrent ? 2 : 1;
+            ctx.beginPath();
+            ctx.moveTo(padding, axisY);
+            ctx.lineTo(width - padding, axisY);
+            ctx.stroke();
+
+            // Convert scale coordinates to zoom coordinates
+            // For first layer (NaN fadingInMin), use expandedMin as the fade start
+            // For last layer (NaN fadingOutMax), use collapsedMax as the fade end
+            const fadingInMinZoom = this.scaleToZoom(isNaN(segments.fadingInMin) ? segments.expandedMin : segments.fadingInMin);
+            const expandedMinZoom = this.scaleToZoom(segments.expandedMin);
+            const expandedMaxZoom = this.scaleToZoom(segments.expandedMax);
+            const collapsedMinZoom = this.scaleToZoom(segments.collapsedMin);
+            const collapsedMaxZoom = this.scaleToZoom(segments.collapsedMax);
+            const fadingOutMaxZoom = this.scaleToZoom(isNaN(segments.fadingOutMax) ? segments.collapsedMax : segments.fadingOutMax);
+
+            const windowHeight = 12;
+            const topY = axisY - windowHeight / 2;
+            const bottomY = axisY + windowHeight / 2;
+
+            // Determine window colour based on layer
+            const windowFill = isCurrent ? 'rgba(255, 200, 100, 0.15)' : 'rgba(100, 100, 100, 0.1)';
+            const windowStroke = isCurrent ? '#ffcc66' : '#666666';
+
+            // Draw all segment windows
+            const segmentBounds: Array<[string, number, number, boolean]> = [
+                ['FADING_IN', fadingInMinZoom, expandedMinZoom, false],
+                ['EXPANDED', expandedMinZoom, expandedMaxZoom, true],
+                ['COLLAPSING', expandedMaxZoom, collapsedMinZoom, false],
+                ['COLLAPSED', collapsedMinZoom, collapsedMaxZoom, true],
+                ['FADING_OUT', collapsedMaxZoom, fadingOutMaxZoom, false]
+            ];
+
+            for (const [mode, startZoom, endZoom, isSolid] of segmentBounds) {
+                // Skip if segment is entirely outside visible range
+                if (!isFinite(startZoom) && !isFinite(endZoom)) continue;
+                
+                // Handle infinities: +∞ is left edge, -∞ is right edge
+                let startPx: number;
+                let endPx: number;
+                
+                if (startZoom === Infinity) {
+                    startPx = padding; // +∞ zoom = left edge (fully zoomed in)
+                } else if (startZoom === -Infinity) {
+                    startPx = width - padding; // -∞ zoom = right edge (fully zoomed out)
+                } else if (isFinite(startZoom)) {
+                    startPx = padding + ((maxZoom - startZoom) / zoomRange) * scaleRange;
+                } else {
+                    startPx = padding; // Fallback
+                }
+
+                if (endZoom === Infinity) {
+                    endPx = padding;
+                } else if (endZoom === -Infinity) {
+                    endPx = width - padding;
+                } else if (isFinite(endZoom)) {
+                    endPx = padding + ((maxZoom - endZoom) / zoomRange) * scaleRange;
+                } else {
+                    endPx = width - padding; // Fallback
+                }
+
+                // Skip if both converted to same position
+                if (Math.abs(startPx - endPx) < 1) continue;
+
+                // Solid texture for EXPANDED/COLLAPSED, lighter texture for FADING/COLLAPSING
+                if (isSolid) {
+                    ctx.fillStyle = windowFill;
+                } else {
+                    ctx.fillStyle = windowFill.replace('0.15', '0.08').replace('0.1', '0.05');
+                }
+                ctx.fillRect(Math.min(startPx, endPx), topY, Math.abs(endPx - startPx), bottomY - topY);
+
+                // Draw border
+                ctx.strokeStyle = windowStroke;
+                ctx.lineWidth = isCurrent ? 2 : 1;
+                ctx.strokeRect(Math.min(startPx, endPx), topY, Math.abs(endPx - startPx), bottomY - topY);
+            }
+
+            // Layer label
+            ctx.fillStyle = isCurrent ? '#ffff00' : '#00ff00';
+            ctx.font = 'bold 9px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText(`L${layer}`, padding - 5, axisY + 3);
+
+            // Layer state (presentation mode)
+            const mode = this.getPresentationModeForLayer(layer, zoomLevel, scaleBar);
+            const modeName = this.formatModeName(mode);
+            ctx.fillStyle = isCurrent ? '#ffff00' : '#888888';
+            ctx.font = '8px monospace';
+            ctx.textAlign = 'center';
+            const stateX = padding + (scaleRange / 2);
+            const stateY = axisY + layerHeight / 2 - 2;
+            ctx.fillText(modeName, stateX, stateY);
+        }
+
+        // Draw current zoom indicator (vertical line)
+        const zoomPos = padding + ((maxZoom - zoomLevel) / zoomRange) * scaleRange;
+        ctx.strokeStyle = '#ffff00';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(padding, scaleBottom);
-        ctx.lineTo(width - padding, scaleBottom);
+        ctx.moveTo(zoomPos, padding);
+        ctx.lineTo(zoomPos, height - padding);
         ctx.stroke();
 
-        // Draw end markers
-        ctx.beginPath();
-        ctx.moveTo(padding, scaleBottom - 5);
-        ctx.lineTo(padding, scaleBottom + 5);
-        ctx.moveTo(width - padding, scaleBottom - 5);
-        ctx.lineTo(width - padding, scaleBottom + 5);
-        ctx.stroke();
-
-        // Map zoom to scale position
-        // Scale bar visualization: L0 (zoomed in) on LEFT, L2 (zoomed out) on RIGHT
-        // Zoom coordinates: L0=0 (high), L2=negative (low)
-        // So we need to flip: higher zoom → left, lower zoom → right
-        const zoomRange = maxZoom - minZoom;
-        const scaleRange = width - 2 * padding;
-        const zoomPos = padding + ((maxZoom - zoomLevel) / zoomRange) * scaleRange;
-
-        // Draw fade windows for all layers
-        // Windows are defined in SCALE coordinates (cumulative scale factor)
-        ctx.fillStyle = 'rgba(100, 150, 255, 0.1)';
-        ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 2]);
-        
-        for (const [layer] of scaleBar.layerPositions.entries()) {
-            const { minScale, maxScale } = scaleBar.getLayerWindow(layer);
-            
-            // Convert scale coordinates to zoom coordinates for display
-            // Handle very small scales (approaching 0) by clamping to a reasonable max zoom
-            const minZoomForLayer = minScale <= Number.EPSILON ? maxZoom : -Math.log2(minScale);
-            const maxZoomForLayer = maxScale === Infinity ? minZoom : -Math.log2(maxScale);
-            
-            // Then convert zoom to pixel positions
-            const minPx = padding + ((maxZoom - minZoomForLayer) / zoomRange) * scaleRange;
-            const maxPx = padding + ((maxZoom - maxZoomForLayer) / zoomRange) * scaleRange;
-            
-            // Highlight current layer's window
-            if (layer === currentLayer) {
-                ctx.fillStyle = 'rgba(255, 100, 255, 0.15)';
-                ctx.strokeStyle = 'rgba(255, 100, 255, 0.5)';
-                ctx.lineWidth = 1.5;
-            } else {
-                ctx.fillStyle = 'rgba(100, 150, 255, 0.1)';
-                ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
-                ctx.lineWidth = 1;
-            }
-            
-            ctx.fillRect(minPx, scaleTop - 5, maxPx - minPx, scaleHeight + 10);
-            ctx.strokeRect(minPx, scaleTop - 5, maxPx - minPx, scaleHeight + 10);
-            
-            // Draw label switch point
-            const labelSwitchZoom = scaleBar.getLabelSwitchZoom(layer);
-            const switchPx = padding + ((maxZoom - labelSwitchZoom) / zoomRange) * scaleRange;
-            ctx.strokeStyle = 'rgba(200, 100, 200, 0.5)';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([1, 1]);
-            ctx.beginPath();
-            ctx.moveTo(switchPx, scaleTop - 3);
-            ctx.lineTo(switchPx, scaleBottom + 3);
-            ctx.stroke();
-            ctx.setLineDash([2, 2]);
-            
-            // Draw fade checkpoints (10% from window edges in zoom space)
-            const minCheckpointZoom = scaleBar.getMinFadeCheckpoint(layer);
-            const maxCheckpointZoom = scaleBar.getMaxFadeCheckpoint(layer);
-            const minCheckPx = padding + ((maxZoom - minCheckpointZoom) / zoomRange) * scaleRange;
-            const maxCheckPx = padding + ((maxZoom - maxCheckpointZoom) / zoomRange) * scaleRange;
-            
-            ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)';
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([3, 2]);
-            // Min fade checkpoint
-            ctx.beginPath();
-            ctx.moveTo(minCheckPx, scaleTop + scaleHeight - 3);
-            ctx.lineTo(minCheckPx, scaleBottom + 3);
-            ctx.stroke();
-            // Max fade checkpoint
-            ctx.beginPath();
-            ctx.moveTo(maxCheckPx, scaleTop + scaleHeight - 3);
-            ctx.lineTo(maxCheckPx, scaleBottom + 3);
-            ctx.stroke();
-            ctx.setLineDash([2, 2]);
-        }
-        
-        ctx.setLineDash([]);
-
-        // Draw current zoom indicator (yellow triangle)
+        // Current zoom label
         ctx.fillStyle = '#ffff00';
-        ctx.beginPath();
-        ctx.moveTo(zoomPos, scaleTop - 8);
-        ctx.lineTo(zoomPos - 4, scaleTop - 1);
-        ctx.lineTo(zoomPos + 4, scaleTop - 1);
-        ctx.closePath();
-        ctx.fill();
-
-        // Draw layer optimal positions using scale bar
-        ctx.fillStyle = '#0088ff';
-        ctx.font = '9px monospace';
+        ctx.font = 'bold 9px monospace';
         ctx.textAlign = 'center';
-        
-        for (const [layer, optimalZoom] of scaleBar.layerPositions.entries()) {
-            if (optimalZoom >= minZoom && optimalZoom <= maxZoom) {
-                const layerPos = padding + ((maxZoom - optimalZoom) / zoomRange) * scaleRange;
+        ctx.fillText(`Z:${zoomLevel.toFixed(1)}`, zoomPos, height - 3);
 
-                // Highlight current layer's optimal position
-                const isCurrentLayer = layer === currentLayer;
-                const tickHeight = isCurrentLayer ? 8 : 4;
-                const tickColor = isCurrentLayer ? '#ff00ff' : '#0088ff';
-                
-                ctx.strokeStyle = tickColor;
-                ctx.lineWidth = isCurrentLayer ? 2 : 1;
-                
-                // Tick mark
-                ctx.beginPath();
-                ctx.moveTo(layerPos, scaleBottom);
-                ctx.lineTo(layerPos, scaleBottom + tickHeight);
-                ctx.stroke();
-
-                // Layer label
-                ctx.fillStyle = tickColor;
-                ctx.font = '8px monospace';
-                const scaleLabel = `L${layer}`;
-                ctx.fillText(scaleLabel, layerPos, scaleBottom + 16);
-                ctx.font = '9px monospace';
-                
-                // Show optimal zoom value for current layer
-                if (isCurrentLayer) {
-                    ctx.font = '8px monospace';
-                    ctx.fillText(`${optimalZoom.toFixed(1)}`, layerPos, scaleTop - 10);
-                    ctx.font = '9px monospace';
-                }
-            }
-        }
-
-        // Min/Max labels (left = zoomed in, right = zoomed out)
-        // minZoom is most negative (zoomed out), maxZoom is most positive (zoomed in)
-        // But we display them: left = high zoom (in), right = low zoom (out)
+        // Min/Max labels at bottom
         ctx.fillStyle = '#00ff00';
-        ctx.font = '10px monospace';
+        ctx.font = '8px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(`${maxZoom.toFixed(1)} (in)`, padding + 2, height - 2);
+        ctx.fillText(`${maxZoom.toFixed(1)}`, padding + 2, 10);
 
         ctx.textAlign = 'right';
-        ctx.fillText(`${minZoom.toFixed(1)} (out)`, width - padding - 2, height - 2);
+        ctx.fillText(`${minZoom.toFixed(1)}`, width - padding - 2, 10);
     }
 
     /**

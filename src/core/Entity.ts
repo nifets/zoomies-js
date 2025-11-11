@@ -1,5 +1,6 @@
 import { Shape } from '../shapes/Shape';
 import { ShapeFactory } from '../shapes/ShapeFactory';
+import { ShapeComparison } from '../shapes/ShapeComparison';
 import { Connection } from './Connection';
 import { CONFIG } from '../config';
 
@@ -126,6 +127,22 @@ export class Entity {
     containsPoint(worldPointX: number, worldPointY: number): boolean {
         const worldSize = this.getWorldSize();
         return this.shapeObject.containsPoint(worldPointX, worldPointY, this.x, this.y, worldSize);
+    }
+
+    /**
+     * Check if this entity is completely inside another entity.
+     */
+    isInside(other: Entity): boolean {
+        return ShapeComparison.isShapeInside(
+            this.shapeObject,
+            this.x,
+            this.y,
+            this.getWorldSize(),
+            other.shapeObject,
+            other.x,
+            other.y,
+            other.getWorldSize()
+        );
     }
 
     /**
