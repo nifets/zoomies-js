@@ -275,12 +275,6 @@ export class PhysicsEngine {
                 continue;
             }
             
-            // Skip synthetic edges entirely - they're just visual representations
-            if (connection.attributes.synthetic) {
-                // console.log(`[PhysicsEngine] Skipping synthetic connection: ${connection.id}`);
-                continue;
-            }
-            
             const source = connection.sources[0];
             const target = connection.targets[0];
             
@@ -346,9 +340,11 @@ export class PhysicsEngine {
             
             if (distToTarget > 0) {
                 // Get the border point in the direction of target parent
+                const sourceParentWorldSize = sourceParent.getWorldSize();
                 const branchPoint = sourceParent.shapeObject.getBorderPoint(
                     sourceParent.x, sourceParent.y,
-                    target.parent.x, target.parent.y
+                    target.parent.x, target.parent.y,
+                    sourceParentWorldSize
                 );
                 
                 // Attract source node toward this branching point
@@ -550,6 +546,10 @@ export class PhysicsEngine {
         const avgRadius = (aRadius + bRadius) / 2;
         const sizeScale = avgRadius / CONFIG.BASE_UNIT_TO_PIXELS;
         
+        // Layer scale factor: account for cumulative scale differences
+        // Use average cumulative scale to maintain consistent elasticity across layers
+        const avgCumulativeScale = (a.getCumulativeScale() + b.getCumulativeScale()) / 2;
+        
         // Cap the attraction distance to prevent excessive forces
         const maxAttractionDistance = targetDist * 3;
         const effectiveDist = Math.min(dist, maxAttractionDistance);
@@ -560,8 +560,8 @@ export class PhysicsEngine {
             : this.config.edgeAttractionStrength;
         
         // Spring-like attraction: pull towards target distance
-        // Scale strength by node size to maintain consistent behavior across scales
-        const force = (effectiveDist - targetDist) * attractionStrength * sizeScale;
+        // Scale strength by node size and cumulative scale to maintain consistent behavior across layers
+        const force = (effectiveDist - targetDist) * attractionStrength * sizeScale * avgCumulativeScale;
 
         const fx = (dx / (dist + 1e-6)) * force;
         const fy = (dy / (dist + 1e-6)) * force;

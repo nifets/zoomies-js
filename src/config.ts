@@ -8,11 +8,11 @@ export const CONFIG = {
     
     // Base scale: converts normalized units (1.0 = standard shape) to pixels
     // A shape with normalized size 1.0 renders as this many pixels (before layer/camera scaling)
-    BASE_UNIT_TO_PIXELS: 50,
+    BASE_UNIT_TO_PIXELS: 120,
     
     // Edge width scaling factor (multiplier applied to edge widths)
     // Reduce this if edges appear too thick relative to nodes
-    EDGE_WIDTH_SCALE: 0.2,
+    EDGE_WIDTH_SCALE: 0.05,
     
     // Detail state styling
     DETAIL_BACKGROUND_OPACITY_TRANSPARENT: 0.15, // At optimal zoom
@@ -21,22 +21,33 @@ export const CONFIG = {
     DETAIL_SHOW_BORDER_THRESHOLD: 0.3,            // Show border when detail > this
     
     // Label font size (base, before layer scaling)
-    LABEL_FONT_SIZE: 70,
+    LABEL_FONT_SIZE: 32,
+    
+    // Edge label font size scaling (multiplier relative to node labels)
+    EDGE_LABEL_FONT_SCALE: 0.66,
+    
+    // Edge label offset perpendicular to edge (in normalized units)
+    EDGE_LABEL_OFFSET: -12,
     
     // Label texture resolution (higher = crisper text, but more memory)
     LABEL_TEXTURE_RESOLUTION: 4.0,
     
     // Node border stroke width (in pixels)
-    NODE_BORDER_WIDTH: 12,
+    NODE_BORDER_WIDTH: 6,
     
     // Node border stroke width when selected (in pixels)
-    NODE_BORDER_WIDTH_SELECTED: 16,
+    NODE_BORDER_WIDTH_SELECTED: 8,
     
     // ============ ZOOM & SCALE ============
     
     // Scale bar buffer: prevents boundary layer entities from becoming invisible
     // Must be > fadeDistance * 2
     SCALE_BAR_BUFFER_MULTIPLIER: 2.5,  // Multiplied by fadeDistance
+    
+    // Fade range multiplier: how far from optimal can you see a layer before it fades
+    // Visibility range = fadeDistance * FADE_RANGE_MULTIPLIER
+    // Increase to see adjacent layers smoothly across more zoom range
+    FADE_RANGE_MULTIPLIER: 1.0,
     
     // Default layer scale factor (L1 is 3× L0, L2 is 3× L1, etc.)
     DEFAULT_LAYER_SCALE_FACTOR: 3,

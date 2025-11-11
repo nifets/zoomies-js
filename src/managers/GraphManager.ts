@@ -370,7 +370,11 @@ export class GraphManager {
      * Get visible nodes based on current zoom level (excluding implicit).
      */
     getVisibleNodes(): Entity[] {
-        return this.getAllEntities().filter(e => !e.implicit && e.visible);
+        const visibleEntities = this.layerDetailManager.getVisibleEntities(
+            this.getAllEntities(),
+            this.zoomManager.zoomLevel
+        );
+        return visibleEntities.filter(e => !e.implicit);
     }
 
     /**
@@ -435,6 +439,14 @@ export class GraphManager {
             this.entities,
             this.zoomManager.zoomLevel
         );
+        
+        if (CONFIG.DEBUG) {
+            const layerBreakdown = new Map<number, number>();
+            for (const entity of visibleEntities) {
+                layerBreakdown.set(entity.layer, (layerBreakdown.get(entity.layer) ?? 0) + 1);
+            }
+            console.log(`[GraphManager.updatePhysicsForVisibleLayers] Total visible: ${visibleEntities.length}, by layer: ${Array.from(layerBreakdown.entries()).map(([l, c]) => `L${l}:${c}`).join(', ')}`);
+        }
         
         this.physicsEngine.setVisibleEntities(visibleEntities);
     }
@@ -528,6 +540,11 @@ export class GraphManager {
                 this.zoomManager.zoomLevel
             );
             
+            if (CONFIG.DEBUG && visibleEntities.length > 0) {
+                const firstVisible = visibleEntities[0];
+                console.log(`[GraphManager.getEntityAtPoint] Checking ${visibleEntities.length} entities, first: ${firstVisible.id} (layer ${firstVisible.layer}), click at (${worldX.toFixed(0)}, ${worldY.toFixed(0)})`);
+            }
+            
             let closest: Entity | null = null;
             let closestDist = Infinity;
             
@@ -538,20 +555,30 @@ export class GraphManager {
                 // Check if entity is visible (opacity > 0)
                 const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
                 if (detailState.opacity <= 0) {
+                    if (CONFIG.DEBUG) console.log(`    ${entity.id}: opacity=${detailState.opacity}, skip`);
                     continue;
                 }
                 
                 // Check if point is inside the entity's hitbox (world space)
                 if (!entity.containsPoint(worldX, worldY)) {
+                    if (CONFIG.DEBUG) {
+                        const dist = Math.hypot(entity.x - worldX, entity.y - worldY);
+                        console.log(`    ${entity.id}: dist=${dist.toFixed(0)}, outside hitbox`);
+                    }
                     continue;
                 }
                 
                 // Calculate distance from point to entity center for sorting
                 const dist = Math.hypot(entity.x - worldX, entity.y - worldY);
                 if (dist < closestDist) {
+                    if (CONFIG.DEBUG) console.log(`    ${entity.id}: CLOSEST, dist=${dist.toFixed(0)}`);
                     closest = entity;
                     closestDist = dist;
                 }
+            }
+            
+            if (CONFIG.DEBUG && closest) {
+                console.log(`[GraphManager.getEntityAtPoint] Selected: ${closest.id}`);
             }
             
             return closest;
@@ -691,6 +718,10 @@ export class GraphManager {
 
         const visibleConnections = this.getVisibleConnections();
         const visibleNodes = this.getVisibleNodes();
+        
+        if (CONFIG.DEBUG) {
+            console.log(`[GraphManager.render] visibleNodes: ${visibleNodes.length}, visibleConnections: ${visibleConnections.length}`);
+        }
 
         // Filter visible nodes to only those in visible layers
         const layerFilteredNodes = visibleNodes.filter(node => visibleEntitySet.has(node));
@@ -700,6 +731,10 @@ export class GraphManager {
             conn.sources.some(s => visibleEntitySet.has(s)) ||
             conn.targets.some(t => visibleEntitySet.has(t))
         );
+        
+        if (CONFIG.DEBUG) {
+            console.log(`[GraphManager.render] layerFilteredNodes: ${layerFilteredNodes.length}, layerFilteredConnections: ${layerFilteredConnections.length}`);
+        }
 
         // Group nodes and edges by layer
         const nodesByLayer = new Map<number, Entity[]>();
@@ -728,11 +763,35 @@ export class GraphManager {
 
         // Get all unique layers and sort descending (highest layer first = rendered last = on top)
         const allLayers = Array.from(new Set([...nodesByLayer.keys(), ...connectionsByLayer.keys()])).sort((a, b) => b - a);
+        
+        // Get visible layers at current zoom
+        const visibleLayers = this.layerDetailManager.getVisibleLayers(this.zoomManager.zoomLevel);
+        const visibleLayersSet = new Set(visibleLayers);
+        
+        if (CONFIG.DEBUG) {
+            console.log(`[GraphManager.render] Zoom: ${this.zoomManager.zoomLevel.toFixed(2)}, Visible layers: [${Array.from(visibleLayers).join(', ')}]`);
+        }
 
-        // Draw each layer: edges then nodes
-        for (const layer of allLayers) {
+        // Draw each layer in REVERSE order (higher layers first, so they render underneath)
+        // This ensures layer 0 nodes appear on top
+        for (const layer of allLayers.reverse()) {
+            // Only render if layer is visible
+            if (!visibleLayersSet.has(layer)) {
+                if (CONFIG.DEBUG) {
+                    console.log(`[GraphManager.render] Skipping layer ${layer} (not visible)`);
+                }
+                continue;
+            }
+            
+            if (CONFIG.DEBUG) {
+                console.log(`[GraphManager.render] Rendering layer ${layer}`);
+            }
+            
             // Draw edges at this layer
             const edgesAtLayer = connectionsByLayer.get(layer) || [];
+            if (CONFIG.DEBUG) {
+                console.log(`[GraphManager.render] Layer ${layer} has ${edgesAtLayer.length} edges`);
+            }
             for (const conn of edgesAtLayer) {
                 let minLayer = Infinity;
                 for (const source of conn.sources) {
@@ -749,6 +808,9 @@ export class GraphManager {
 
             // Draw all nodes at this layer (composites and regular nodes together)
             const nodesAtLayer = nodesByLayer.get(layer) || [];
+            if (CONFIG.DEBUG) {
+                console.log(`[GraphManager.render] Layer ${layer} has ${nodesAtLayer.length} nodes`);
+            }
             for (const entity of nodesAtLayer) {
                 const detailState = this.layerDetailManager.getDetailStateAtZoom(entity, this.zoomManager.zoomLevel);
                 if (entity.isComposite()) {

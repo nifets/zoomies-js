@@ -21,22 +21,19 @@ export abstract class Shape {
      * For circles: π × r². For rectangles: w × h.
 
     /**
-     * Get the world-space size (for physics simulation).
-     * Shape computes this from its normalized dimensions and cumulative scale.
+     * Get the world-space size (diameter for circles, max dimension for rectangles).
      * @param cumulativeScale - Cumulative layer scale factor
      */
     getWorldSize(cumulativeScale: number): number {
-        return (this.getDiameter() * CONFIG.BASE_UNIT_TO_PIXELS) / cumulativeScale;
-    }
-
-    /**
+        return (this.getDiameter() * CONFIG.BASE_UNIT_TO_PIXELS * cumulativeScale);
+    }    /**
      * Get world-space area (for validation, composite sizing).
      * Area scales with size squared.
      * @param cumulativeScale - Cumulative layer scale factor
      */
     getWorldArea(cumulativeScale: number): number {
         const normalizedArea = this.getArea();
-        const scaleFactor = CONFIG.BASE_UNIT_TO_PIXELS / cumulativeScale;
+        const scaleFactor = CONFIG.BASE_UNIT_TO_PIXELS * cumulativeScale;
         return normalizedArea * scaleFactor * scaleFactor;
     }
 

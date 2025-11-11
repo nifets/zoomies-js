@@ -14,7 +14,8 @@ export class Renderer {
     nodeLabels: Map<Entity, Text>;
     edgeLabels: Map<Connection, Text>;
     worldContainer: Container;
-    connectionContainer: Container;
+    intraLayerConnectionContainer: Container;  // Edges within same layer (rendered under nodes)
+    crossLayerConnectionContainer: Container;  // Edges between layers (rendered over nodes)
     nodeContainer: Container;
     labelContainer: Container;
     scale: number;
@@ -37,11 +38,14 @@ export class Renderer {
         this.nodeLabels = new Map();
         this.edgeLabels = new Map();
         this.worldContainer = new Container();
-        this.connectionContainer = new Container();
+        this.intraLayerConnectionContainer = new Container();
+        this.crossLayerConnectionContainer = new Container();
         this.nodeContainer = new Container();
         this.labelContainer = new Container();
+        // Rendering order: intra-layer edges (under) → nodes → cross-layer edges (over) → labels
+        this.worldContainer.addChild(this.intraLayerConnectionContainer);
         this.worldContainer.addChild(this.nodeContainer);
-        this.worldContainer.addChild(this.connectionContainer);
+        this.worldContainer.addChild(this.crossLayerConnectionContainer);
         this.worldContainer.addChild(this.labelContainer);
         this.scale = 1;
         this.offsetX = rect.width / 2;
@@ -187,6 +191,24 @@ export class Renderer {
         return maxLayer;
     }
 
+    /**
+     * Check if a connection is within a single layer (intra-layer).
+     * Returns true if all sources and targets are in the same layer.
+     */
+    private isConnectionIntraLayer(connection: Connection): boolean {
+        if (connection.sources.length === 0 || connection.targets.length === 0) {
+            return true; // Edge case: treat as intra-layer
+        }
+        const firstLayer = connection.sources[0].layer;
+        for (const source of connection.sources) {
+            if (source.layer !== firstLayer) return false;
+        }
+        for (const target of connection.targets) {
+            if (target.layer !== firstLayer) return false;
+        }
+        return true;
+    }
+
     // ============================================================================
     // RENDERING METHODS
     // ============================================================================
@@ -198,12 +220,14 @@ export class Renderer {
             graphics = new Graphics();
             this.nodeContainer.addChild(graphics);
             this.nodeGraphics.set(node, graphics);
-            console.log('[Renderer] Created graphics for node:', node.id, 'at', node.x, node.y);
         }
         graphics.clear();
         
         // Use detail state opacity if provided, otherwise fall back to old method
         const finalOpacity = detailState ? detailState.opacity * node.alpha : node.alpha * this.getChildNodeOpacity(node);
+        if (CONFIG.DEBUG) {
+            console.log(`[Renderer] drawNode ${node.id}: detailState.opacity=${detailState?.opacity}, node.alpha=${node.alpha}, finalOpacity=${finalOpacity}`);
+        }
         graphics.alpha = finalOpacity;
         
         // Entity-level attributes take precedence over layer metadata
@@ -228,6 +252,10 @@ export class Renderer {
         const labelTransform = LabelRenderer.getNodeLabelTransform(node, detailState);
         const targetRes = this.getTextureResolution(node.cumulativeScale);
         
+        if (CONFIG.DEBUG && node.layer === 0) {
+            console.log(`[Renderer] Node ${node.id} L${node.layer}: labelInside=${detailState?.labelInside}, worldY=${labelTransform.worldY}`);
+        }
+        
         const label = this.updateLabel(
             this.nodeLabels,
             node,
@@ -247,7 +275,10 @@ export class Renderer {
         let graphics = this.connectionGraphics.get(connection);
         if (!graphics) {
             graphics = new Graphics();
-            this.connectionContainer.addChild(graphics);
+            // Determine if this is an intra-layer or cross-layer edge
+            const isIntraLayer = this.isConnectionIntraLayer(connection);
+            const container = isIntraLayer ? this.intraLayerConnectionContainer : this.crossLayerConnectionContainer;
+            container.addChild(graphics);
             this.connectionGraphics.set(connection, graphics);
         }
         graphics.clear();

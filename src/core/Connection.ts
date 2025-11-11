@@ -125,10 +125,10 @@ export class Connection {
 
     /**
      * Get the world-space width (for physics and rendering).
-     * Edges scale the same way as nodes: (normalizedWidth × BASE_UNIT_TO_PIXELS × EDGE_WIDTH_SCALE) / cumulativeScale
+     * Edges scale the same way as nodes: (normalizedWidth × BASE_UNIT_TO_PIXELS × EDGE_WIDTH_SCALE) * cumulativeScale
      */
     getWorldWidth(): number {
-        return (this.normalizedWidth * CONFIG.BASE_UNIT_TO_PIXELS * CONFIG.EDGE_WIDTH_SCALE) / this.cumulativeScale;
+        return (this.normalizedWidth * CONFIG.BASE_UNIT_TO_PIXELS * CONFIG.EDGE_WIDTH_SCALE) * this.cumulativeScale;
     }
 
     /**

@@ -13,10 +13,40 @@ import { CONFIG } from '../config';
  *
  * This ensures visual scale invariance: zooming out by log₂(k) units shows objects
  * that are k× bigger at the same on-screen size.
+ *
+ * ZOOM DIRECTION REFERENCE:
+ * - Positive zoom = zoomed in (higher numbers, further right on scale bar)
+ * - Negative zoom = zoomed out (lower numbers, further left on scale bar)
+ * - Higher zoom → larger camera scale → objects appear smaller
+ * - Lower zoom → smaller camera scale → objects appear larger
+ *
+ * ASYMMETRICAL FADE REGIONS WITH OVERLAP:
+ * Each layer has a fade region [bottomZoom, topZoom] where it's visible/fading.
+ * The region extends asymmetrically with overlap for smooth crossfading:
+ * - topZoom = layer's optimal zoom (fully visible here)
+ * - bottomZoom = next higher layer's optimal - fadeDistance (creates overlap zone)
+ *
+ * Example with 3 layers (L0 at 0, L1 at -2.32, L2 at -4.64, fadeDistance=0.6):
+ * - L0 fade region: [-1.72, 0]      (visible from -1.72 down to optimal at 0)
+ * - L1 fade region: [-4.04, -2.32]  (visible from -4.04 down to optimal at -2.32)
+ * - L2 fade region: [-∞, -4.64]     (visible from optimal downward)
+ *
+ * This creates overlap zones for smooth crossfading:
+ * - At zoom=0: only L0 visible (at optimal)
+ * - At zoom=-1: only L0 visible (before L0's fadeDistance boundary)
+ * - At zoom=-1.72: L0 starts fading, L1 starts appearing
+ * - At zoom=-2.32: L0 opaque, L1 transparent (both fully visible for layer switch)
+ * - At zoom=-3: L0 fading out, L1 visible
+ * - At zoom=-4.04: L1 starts fading, L2 starts appearing
+ * - At zoom=-4.64: L1 opaque, L2 transparent (both fully visible)
+ * - Asymmetrical: each layer only visible at its optimal and below (towards higher layers)
  */
 export class ScaleBar {
     /** Layer index → optimal zoom position */
     layerPositions: Map<number, number>;
+
+    /** Layer index → spacing to next layer (for fade calculations) */
+    layerSpacings: Map<number, number>;
 
     /** Minimum zoom level (fully zoomed out) */
     minZoom: number;
@@ -34,6 +64,7 @@ export class ScaleBar {
         defaultLayerScaleFactor: number = 3
     ) {
         this.layerPositions = new Map();
+        this.layerSpacings = new Map();
         this.fadeDistance = 0;
 
         // Build scale bar mapping from zoom coordinates to scale coordinates
@@ -58,19 +89,21 @@ export class ScaleBar {
             const spacing = Math.log2(relativeScale);
             currentZoom -= spacing; // Subtract to zoom out (lower camera scale)
             this.layerPositions.set(layer, currentZoom);
+            this.layerSpacings.set(layer - 1, spacing); // Store spacing for layer transition
             previousSpacing = spacing;
         }
 
-        // Fade distance: half the spacing between layers
-        this.fadeDistance = previousSpacing > 0 ? previousSpacing * 0.5 : Math.log2(defaultLayerScaleFactor) * 0.5;
+        // Fade distance: based on default layer scale factor (consistent regardless of actual layers)
+        const defaultSpacing = Math.log2(defaultLayerScaleFactor);
+        this.fadeDistance = defaultSpacing * 0.5;
 
         // Set zoom range with buffer
-        // minZoom (most negative) = where highest layer is (most zoomed out)
-        // maxZoom (most positive) = where L0 is (most zoomed in)
-        // Buffer must be > fadeDistance * 2 to ensure L0 stays visible at boundaries
-        const buffer = this.fadeDistance * CONFIG.SCALE_BAR_BUFFER_MULTIPLIER;
-        this.minZoom = currentZoom - buffer; // currentZoom is negative for high layers
-        this.maxZoom = buffer; // L0 at 0, add positive buffer
+        // Buffer must scale with total depth to keep minZoom fixed regardless of number of layers
+        const totalDepth = Math.abs(currentZoom);
+        const baseBuffer = this.fadeDistance * CONFIG.SCALE_BAR_BUFFER_MULTIPLIER;
+        const buffer = totalDepth + baseBuffer;
+        this.minZoom = -buffer; // Scaled minimum zoom
+        this.maxZoom = baseBuffer; // Maximum zoom buffer (L0 at 0)
     }
 
     /**
@@ -101,35 +134,102 @@ export class ScaleBar {
 
         /**
      * Get all layers that are at least partially visible at given zoom.
-     * At extreme zoom: includes all layers to keep physics/interactions active.
+     * Uses asymmetrical fading via getLayerWindow().
      */
     getVisibleLayers(zoomLevel: number): number[] {
         const visibleLayers: number[] = [];
         const allLayers = Array.from(this.layerPositions.keys());
-        const minLayer = Math.min(...allLayers);
-        const maxLayer = Math.max(...allLayers);
 
         for (const layer of allLayers) {
-            const distance = this.getDistanceFromOptimal(layer, zoomLevel);
-            const absDistance = Math.abs(distance);
-            
-            // Include if within normal fade range
-            if (absDistance <= this.fadeDistance * 2) {
-                visibleLayers.push(layer);
-            }
-            // At extreme zoom in (distance < 0): keep minLayer visible
-            else if (layer === minLayer && distance > 0) {
-                visibleLayers.push(layer);
-            }
-            // At extreme zoom out (distance > 0): keep maxLayer visible
-            else if (layer === maxLayer && distance < 0) {
+            if (this.isLayerVisible(layer, zoomLevel)) {
                 visibleLayers.push(layer);
             }
         }
+        
         return visibleLayers.sort((a, b) => a - b);
     }
 
     /**
+     * Get the fade distance for a specific layer (half the spacing to next layer).
+     * Uses actual per-layer spacing if available, otherwise default.
+     */
+    getFadeDistanceForLayer(layer: number): number {
+        // Try to use actual spacing for this layer
+        const actualSpacing = this.layerSpacings.get(layer);
+        if (actualSpacing !== undefined) {
+            return actualSpacing * 0.5 * CONFIG.FADE_RANGE_MULTIPLIER;
+        }
+        // Fallback to default
+        return this.fadeDistance * CONFIG.FADE_RANGE_MULTIPLIER;
+    }
+
+    /**
+     * Get the normalized position of a zoom level on the scale bar (0 = left/max zoom out, 1 = right/max zoom in).
+     * This converts zoom coordinates to a visual position for easier reasoning.
+     */
+    private getScaleBarPosition(zoomLevel: number): number {
+        const range = this.maxZoom - this.minZoom;
+        if (range <= 0) return 0.5; // Fallback if range is invalid
+        return (this.maxZoom - zoomLevel) / range; // Higher zoom = lower position (left = 0, right = 1)
+    }
+
+    /**
+     * Get the visibility window for a layer in SCALE COORDINATES (cumulative scale factor).
+     * Scale = 2^(-zoom), so:
+     * - Scale 1 = L0 optimal (zoom=0)
+     * - Scale 3 = L1 optimal (zoom=-log₂(3))
+     * - Scale 6 = L2 optimal (zoom=-log₂(3) - log₂(2))
+     *
+     * Returns { minScale, maxScale } defining the visible range.
+     */
+    getLayerWindow(layer: number): { minScale: number; maxScale: number } {
+        const allLayers = Array.from(this.layerPositions.keys());
+        const minLayer = Math.min(...allLayers);
+        const maxLayer = Math.max(...allLayers);
+        const optimalZoom = this.getOptimalZoomForLayer(layer);
+        
+        let minZoom: number;
+        let maxZoom_val: number;
+        
+        // minZoom: extend slightly left from optimal
+        if (layer === minLayer) {
+            // L0 only extends left slightly, not to maxZoom
+            const nextLayer = layer + 1;
+            if (allLayers.includes(nextLayer)) {
+                const nextOptimal = this.getOptimalZoomForLayer(nextLayer);
+                const spacingToNext = nextOptimal - optimalZoom;
+                minZoom = optimalZoom + spacingToNext * 0.25;
+            } else {
+                minZoom = optimalZoom - this.fadeDistance;
+            }
+        } else {
+            // Non-L0: extend 25% towards previous layer
+            const prevLayer = layer - 1;
+            const prevOptimal = this.getOptimalZoomForLayer(prevLayer);
+            const spacingToPrev = prevOptimal - optimalZoom;
+            minZoom = optimalZoom + spacingToPrev * 0.25;
+        }
+        
+        // maxZoom: extend well to the right (towards next layer)
+        if (layer === maxLayer) {
+            // Max layer only extends right slightly, not to minZoom
+            const prevLayer = layer - 1;
+            const prevOptimal = this.getOptimalZoomForLayer(prevLayer);
+            const spacingToPrev = prevOptimal - optimalZoom;
+            maxZoom_val = optimalZoom + spacingToPrev * 0.75;
+        } else {
+            const nextLayer = layer + 1;
+            const nextOptimal = this.getOptimalZoomForLayer(nextLayer);
+            // Extend 75% of the way towards next layer
+            const spacingToNext = nextOptimal - optimalZoom;
+            maxZoom_val = optimalZoom + spacingToNext * 0.75;
+        }
+        
+        const minScale = Math.pow(2, -minZoom);
+        const maxScale = Math.pow(2, -maxZoom_val);
+        
+        return { minScale, maxScale };
+    }    /**
      * Calculate distance from optimal for a layer at given zoom.
      * Negative distance = before optimal (zoomed in too much)
      * Zero distance = at optimal
@@ -142,50 +242,140 @@ export class ScaleBar {
 
     /**
      * Determine if a layer is visible at given zoom.
-     * At extreme zoom: boundary layers stay visible to keep physics active.
+     * Single source of truth - all visibility checks go through here.
      */
     isLayerVisible(layer: number, zoomLevel: number): boolean {
-        const distance = this.getDistanceFromOptimal(layer, zoomLevel);
-        const absDistance = Math.abs(distance);
-        const allLayers = Array.from(this.layerPositions.keys());
-        const minLayer = Math.min(...allLayers);
-        const maxLayer = Math.max(...allLayers);
+        const { minScale, maxScale } = this.getLayerWindow(layer);
+        const currentScale = Math.pow(2, -zoomLevel);
+        const isVisible = currentScale >= minScale && currentScale <= maxScale;
         
-        // Normal visibility check
-        if (absDistance <= this.fadeDistance * 2) {
-            return true;
+        if (CONFIG.DEBUG) {
+            const optimalZoom = this.getOptimalZoomForLayer(layer);
+            console.log(`[ScaleBar] Layer ${layer}: optimal-scale=${Math.pow(2, -optimalZoom).toFixed(2)}, window=[${minScale.toFixed(2)}, ${maxScale === Infinity ? '∞' : maxScale.toFixed(2)}], current-scale=${currentScale.toFixed(2)} → ${isVisible ? 'visible' : 'skip'}`);
         }
         
-        // At extreme zoom in (distance < 0): minLayer stays visible
-        if (layer === minLayer && distance < 0) {
-            return true;
-        }
-        
-        // At extreme zoom out (distance > 0): maxLayer stays visible
-        if (layer === maxLayer && distance > 0) {
-            return true;
-        }
-        
-        return false;
+        return isVisible;
     }
 
     /**
-     * Get normalised fade parameter (0 = fully in view, 1 = at window edge).
+     * Get normalised fade parameter (0 = fully visible, 1 = fully faded).
      * Used for opacity interpolation.
+     * Min layer never fades. Other layers fade at edges (10% of window width each side).
      */
     getNormalisedFadeParameter(layer: number, zoomLevel: number): number {
-        const distance = Math.abs(this.getDistanceFromOptimal(layer, zoomLevel));
-        const fadeStart = this.fadeDistance;
-        const fadeEnd = this.fadeDistance * 2;
-
-        if (distance <= fadeStart) {
-            return 0; // Fully visible
-        } else if (distance >= fadeEnd) {
-            return 1; // Fully faded
-        } else {
-            // Interpolate between fadeStart and fadeEnd
-            return (distance - fadeStart) / (fadeEnd - fadeStart);
+        const { minScale, maxScale } = this.getLayerWindow(layer);
+        const currentScale = Math.pow(2, -zoomLevel);
+        const allLayers = Array.from(this.layerPositions.keys());
+        const minLayer = Math.min(...allLayers);
+        
+        // Min layer (L0) never fades - always visible
+        if (layer === minLayer) {
+            return currentScale >= minScale ? 0 : 1;
         }
+        
+        // Outside window on left (zoomed in too much)
+        if (currentScale < minScale) {
+            return 1;
+        }
+        
+        // Outside window on right (zoomed out too much)
+        if (!isFinite(maxScale) && currentScale > maxScale) {
+            return 1;
+        }
+        
+        // For infinite maxScale (max layer), fade at minScale edge only
+        if (!isFinite(maxScale)) {
+            const globalMaxScale = Math.pow(2, -this.minZoom);
+            const fadeMargin = (globalMaxScale - minScale) * 0.1;
+            
+            // Fade at minScale edge (left)
+            if (currentScale < minScale + fadeMargin && fadeMargin > 0) {
+                const distFromEdge = (minScale + fadeMargin) - currentScale;
+                return Math.min(1, distFromEdge / fadeMargin);
+            }
+            return 0;
+        }
+        
+        const windowWidth = maxScale - minScale;
+        if (windowWidth <= 0) {
+            return 0; // Invalid window, stay visible
+        }
+        
+        const fadeMargin = windowWidth * 0.1; // 10% of window width for fade at each edge
+        
+        // Min layer never fades
+        if (layer === minLayer) {
+            return 0;
+        }
+        
+        // Fade at minScale edge (left side)
+        if (currentScale < minScale + fadeMargin) {
+            const distFromEdge = (minScale + fadeMargin) - currentScale;
+            return Math.min(1, distFromEdge / fadeMargin);
+        }
+        
+        // Fade at maxScale edge (right side)
+        if (currentScale > maxScale - fadeMargin) {
+            const distFromEdge = currentScale - (maxScale - fadeMargin);
+            return Math.min(1, distFromEdge / fadeMargin);
+        }
+        
+        // Inside main window: fully visible
+        return 0;
+    }
+
+    /**
+     * Get the zoom level where labels switch from outside to inside for a layer.
+     * Labels switch at 25% of the way through the window (75% from minScale).
+     * This is SEPARATE from window bounds - it's just cosmetic label positioning.
+     */
+    getLabelSwitchZoom(layer: number): number {
+        const { minScale, maxScale } = this.getLayerWindow(layer);
+        
+        if (maxScale === Infinity) {
+            // For infinite windows, switch at 75% of fade distance
+            const fadeDistance = this.getFadeDistanceForLayer(layer);
+            const optimalZoom = this.getOptimalZoomForLayer(layer);
+            return optimalZoom - fadeDistance * 0.75;
+        }
+        
+        // Label switch at 25% of the way across the window (from minScale towards maxScale)
+        const switchScale = minScale + (maxScale - minScale) * 0.25;
+        
+        // Convert back to zoom coordinates
+        return -Math.log2(switchScale);
+    }
+
+    /**
+     * Get the zoom level where fading starts at the minScale edge.
+     * Fade checkpoint at 10% of the window from minScale (in log/zoom space).
+     */
+    getMinFadeCheckpoint(layer: number): number {
+        const { minScale, maxScale } = this.getLayerWindow(layer);
+        
+        // In log space: multiply by 10% factor
+        // If minScale and maxScale represent 2^(-zoom), then in zoom space:
+        // minZoom = -log2(maxScale), maxZoom = -log2(minScale)
+        // 10% into window from minScale (in log space)
+        const minZoom = -Math.log2(maxScale);
+        const maxZoom = minScale <= Number.EPSILON ? this.maxZoom : -Math.log2(minScale);
+        const fadeZoom = maxZoom - (maxZoom - minZoom) * 0.1; // 10% from maxZoom towards minZoom
+        return fadeZoom;
+    }
+
+    /**
+     * Get the zoom level where fading starts at the maxScale edge.
+     * Fade checkpoint at 10% of the window from maxScale (in log/zoom space).
+     */
+    getMaxFadeCheckpoint(layer: number): number {
+        const { minScale, maxScale } = this.getLayerWindow(layer);
+        
+        // In log space: multiply by 10% factor from the other end
+        // 10% into window from maxScale (in log space, towards minScale)
+        const minZoom = -Math.log2(maxScale === Infinity ? Math.pow(2, -this.minZoom) : maxScale);
+        const maxZoom = minScale <= Number.EPSILON ? this.maxZoom : -Math.log2(minScale);
+        const fadeZoom = minZoom + (maxZoom - minZoom) * 0.1; // 10% from minZoom towards maxZoom
+        return fadeZoom;
     }
 
     /**

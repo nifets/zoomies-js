@@ -99,13 +99,16 @@ export class LayerDetailManager {
         if (!this.scaleBar) return allEntities;
         const visibleLayers = this.getVisibleLayers(zoomLevel);
         const visibleSet = new Set(visibleLayers);
-        return allEntities.filter(e => visibleSet.has(e.layer));
+        const result = allEntities.filter(e => visibleSet.has(e.layer));
+        if (CONFIG.DEBUG) {
+            console.log(`[LayerDetailManager] Zoom: ${zoomLevel.toFixed(2)}, Visible layers: [${Array.from(visibleLayers).join(', ')}], Visible entities: ${result.map(e => e.id).join(', ')}`);
+        }
+        return result;
     }
 
     /**
      * Get the detail state for an entity at a given zoom level.
      * Computes visibility, opacity, rendering style based on distance from optimal.
-     * Boundary layers (minLayer, maxLayer) never fade out past their optimal.
      */
     getDetailStateAtZoom(entity: Entity, zoomLevel: number): DetailState {
         if (!this.scaleBar) {
@@ -120,32 +123,8 @@ export class LayerDetailManager {
             };
         }
 
-        // Get all layers to determine min/max
-        const allLayers = Array.from(this.scaleBar.layerPositions.keys());
-        const minLayer = Math.min(...allLayers);
-        const maxLayer = Math.max(...allLayers);
-
-        // Get distance from optimal
-        const distance = this.scaleBar.getDistanceFromOptimal(entity.layer, zoomLevel);
-        const fadeDistance = this.scaleBar.fadeDistance;
-
-        // Special handling for boundary layers:
-        // - minLayer (L0) never fades when zooming in (negative distance = more zoomed in)
-        // - maxLayer never fades when zooming out (positive distance = more zoomed out)
-        const isMinLayer = entity.layer === minLayer;
-        const isMaxLayer = entity.layer === maxLayer;
-
-        let isVisible: boolean;
-        if (isMinLayer && distance < 0) {
-            // L0 zooming in (more negative): always visible
-            isVisible = true;
-        } else if (isMaxLayer && distance > 0) {
-            // Max layer zooming out (more positive): always visible
-            isVisible = true;
-        } else {
-            // Normal visibility check
-            isVisible = this.scaleBar.isLayerVisible(entity.layer, zoomLevel);
-        }
+        // Check visibility using ScaleBar
+        const isVisible = this.scaleBar.isLayerVisible(entity.layer, zoomLevel);
 
         if (!isVisible) {
             return {
@@ -159,18 +138,8 @@ export class LayerDetailManager {
             };
         }
 
-        // Normalised fade parameter: 0 = at optimal, 1 = at window edge
-        let fadedParam: number;
-        if (isMinLayer && distance > 0) {
-            // L0 zooming in: no fade, stay at optimal
-            fadedParam = 0;
-        } else if (isMaxLayer && distance < 0) {
-            // Max layer zooming out: no fade, stay at optimal
-            fadedParam = 0;
-        } else {
-            // Normal fade calculation
-            fadedParam = this.scaleBar.getNormalisedFadeParameter(entity.layer, zoomLevel);
-        }
+        // Get fade parameter using ScaleBar
+        const fadedParam = this.scaleBar.getNormalisedFadeParameter(entity.layer, zoomLevel);
 
         // Smoothstep for smooth interpolation
         const smoothstep = fadedParam * fadedParam * (3 - 2 * fadedParam);
@@ -181,17 +150,22 @@ export class LayerDetailManager {
         // Detail level: 1 = fully detailed, 0 = fully collapsed
         const detailLevel = 1 - smoothstep;
 
-        // Determine rendering state based on position relative to optimal
-        const zoomedOut = distance < -fadeDistance; // Zoomed out from optimal (higher layers visible)
-        const isOptimal = Math.abs(distance) <= fadeDistance; // At optimal
-        const zoomedIn = distance > fadeDistance; // Zoomed in from optimal (lower layers visible)
+        // Get label switch zoom for this layer
+        const labelSwitchZoom = this.scaleBar.getLabelSwitchZoom(entity.layer);
+        const labelInside = zoomLevel <= labelSwitchZoom; // Labels inside when zoomed out past switch point
+
+        // Determine rendering state based on fade parameter
+        const isOptimal = fadedParam === 0; // At optimal
+        const zoomedOut = fadedParam > 0.5; // Moving towards zoomed-out state
+
+        if (CONFIG.DEBUG && entity.layer === 0) {
+            console.log(`[LayerDetailManager] ${entity.id} L${entity.layer}: fadedParam=${fadedParam.toFixed(3)}, labelSwitchZoom=${labelSwitchZoom.toFixed(3)}, labelInside=${labelInside}`);
+        }
 
         // At optimal: transparent background, label outside, children visible
         // Zoomed out: opaque background, label inside, children hidden (collapsing to parent)
-        // Zoomed in: stay at optimal state (boundary layer handles this)
         const backgroundOpacity = isOptimal ? CONFIG.DETAIL_BACKGROUND_OPACITY_TRANSPARENT : (zoomedOut ? CONFIG.DETAIL_BACKGROUND_OPACITY_OPAQUE * detailLevel : CONFIG.DETAIL_BACKGROUND_OPACITY_TRANSPARENT);
-        const labelInside = zoomedOut && detailLevel > CONFIG.DETAIL_LABEL_INSIDE_THRESHOLD;
-        const showChildren = isOptimal || zoomedIn;
+        const showChildren = isOptimal;
         const showBorder = detailLevel > CONFIG.DETAIL_SHOW_BORDER_THRESHOLD;
 
         return {

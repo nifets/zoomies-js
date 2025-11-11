@@ -93,6 +93,7 @@ export class ZoomDebugWidget {
     /**
      * Draw zoom scale bar using ScaleBar from LayerDetailManager.
      * Each layer marker shows the optimal zoom position from the scale bar.
+     * Fade windows show visibility ranges for each layer.
      */
     private drawScale(zoomLevel: number, minZoom: number, maxZoom: number, currentLayer: number, scaleBar: any): void {
         const ctx = this.scaleCanvas.getContext('2d')!;
@@ -130,6 +131,75 @@ export class ZoomDebugWidget {
         const zoomRange = maxZoom - minZoom;
         const scaleRange = width - 2 * padding;
         const zoomPos = padding + ((maxZoom - zoomLevel) / zoomRange) * scaleRange;
+
+        // Draw fade windows for all layers
+        // Windows are defined in SCALE coordinates (cumulative scale factor)
+        ctx.fillStyle = 'rgba(100, 150, 255, 0.1)';
+        ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        
+        for (const [layer] of scaleBar.layerPositions.entries()) {
+            const { minScale, maxScale } = scaleBar.getLayerWindow(layer);
+            
+            // Convert scale coordinates to zoom coordinates for display
+            // Handle very small scales (approaching 0) by clamping to a reasonable max zoom
+            const minZoomForLayer = minScale <= Number.EPSILON ? maxZoom : -Math.log2(minScale);
+            const maxZoomForLayer = maxScale === Infinity ? minZoom : -Math.log2(maxScale);
+            
+            // Then convert zoom to pixel positions
+            const minPx = padding + ((maxZoom - minZoomForLayer) / zoomRange) * scaleRange;
+            const maxPx = padding + ((maxZoom - maxZoomForLayer) / zoomRange) * scaleRange;
+            
+            // Highlight current layer's window
+            if (layer === currentLayer) {
+                ctx.fillStyle = 'rgba(255, 100, 255, 0.15)';
+                ctx.strokeStyle = 'rgba(255, 100, 255, 0.5)';
+                ctx.lineWidth = 1.5;
+            } else {
+                ctx.fillStyle = 'rgba(100, 150, 255, 0.1)';
+                ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
+                ctx.lineWidth = 1;
+            }
+            
+            ctx.fillRect(minPx, scaleTop - 5, maxPx - minPx, scaleHeight + 10);
+            ctx.strokeRect(minPx, scaleTop - 5, maxPx - minPx, scaleHeight + 10);
+            
+            // Draw label switch point
+            const labelSwitchZoom = scaleBar.getLabelSwitchZoom(layer);
+            const switchPx = padding + ((maxZoom - labelSwitchZoom) / zoomRange) * scaleRange;
+            ctx.strokeStyle = 'rgba(200, 100, 200, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([1, 1]);
+            ctx.beginPath();
+            ctx.moveTo(switchPx, scaleTop - 3);
+            ctx.lineTo(switchPx, scaleBottom + 3);
+            ctx.stroke();
+            ctx.setLineDash([2, 2]);
+            
+            // Draw fade checkpoints (10% from window edges in zoom space)
+            const minCheckpointZoom = scaleBar.getMinFadeCheckpoint(layer);
+            const maxCheckpointZoom = scaleBar.getMaxFadeCheckpoint(layer);
+            const minCheckPx = padding + ((maxZoom - minCheckpointZoom) / zoomRange) * scaleRange;
+            const maxCheckPx = padding + ((maxZoom - maxCheckpointZoom) / zoomRange) * scaleRange;
+            
+            ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([3, 2]);
+            // Min fade checkpoint
+            ctx.beginPath();
+            ctx.moveTo(minCheckPx, scaleTop + scaleHeight - 3);
+            ctx.lineTo(minCheckPx, scaleBottom + 3);
+            ctx.stroke();
+            // Max fade checkpoint
+            ctx.beginPath();
+            ctx.moveTo(maxCheckPx, scaleTop + scaleHeight - 3);
+            ctx.lineTo(maxCheckPx, scaleBottom + 3);
+            ctx.stroke();
+            ctx.setLineDash([2, 2]);
+        }
+        
+        ctx.setLineDash([]);
 
         // Draw current zoom indicator (yellow triangle)
         ctx.fillStyle = '#ffff00';
@@ -178,25 +248,6 @@ export class ZoomDebugWidget {
                 }
             }
         }
-
-        // Draw fade regions around current layer optimal position
-        const fadeDistance = scaleBar.fadeDistance;
-        const currentOptimal = scaleBar.getOptimalZoomForLayer(currentLayer);
-        
-        const fadeLeftZoom = currentOptimal - fadeDistance;
-        const fadeRightZoom = currentOptimal + fadeDistance;
-        
-        const fadeLeftPos = padding + ((maxZoom - Math.min(maxZoom, fadeRightZoom)) / zoomRange) * scaleRange;
-        const fadeRightPos = padding + ((maxZoom - Math.max(minZoom, fadeLeftZoom)) / zoomRange) * scaleRange;
-
-        // Draw fade region (semi-transparent)
-        ctx.fillStyle = 'rgba(255, 0, 255, 0.15)';
-        ctx.fillRect(fadeLeftPos, scaleTop - 5, fadeRightPos - fadeLeftPos, scaleHeight + 10);
-        ctx.strokeStyle = 'rgba(255, 0, 255, 0.4)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 2]);
-        ctx.strokeRect(fadeLeftPos, scaleTop - 5, fadeRightPos - fadeLeftPos, scaleHeight + 10);
-        ctx.setLineDash([]);
 
         // Min/Max labels (left = zoomed in, right = zoomed out)
         // minZoom is most negative (zoomed out), maxZoom is most positive (zoomed in)

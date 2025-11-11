@@ -29,8 +29,8 @@ export class LabelRenderer {
         entity: Entity,
         detailState?: DetailState
     ): LabelTransform {
-        // Font size: base size / cumulative scale
-        const fontSize = CONFIG.LABEL_FONT_SIZE / entity.getCumulativeScale();
+        // Font size: base size * cumulative scale (larger nodes get larger labels)
+        const fontSize = CONFIG.LABEL_FONT_SIZE * entity.getCumulativeScale();
         
         // Label position: inside or outside based on detail state
         const labelOffset = 20;
@@ -62,12 +62,14 @@ export class LabelRenderer {
         const source = connection.sources[0];
         const target = connection.targets[0];
         
-        const worldX = (source.x + target.x) / 2;
-        const worldY = (source.y + target.y) / 2;
+        const midX = (source.x + target.x) / 2;
+        const midY = (source.y + target.y) / 2;
         
-        // Calculate rotation to align with edge
+        // Calculate edge direction
         const dx = target.x - source.x;
         const dy = target.y - source.y;
+        const edgeLength = Math.sqrt(dx * dx + dy * dy);
+        
         let rotation = Math.atan2(dy, dx);
         
         // Flip label if upside down (keep text readable)
@@ -75,8 +77,22 @@ export class LabelRenderer {
             rotation += Math.PI;
         }
         
-        // Font size: base size / cumulative scale (use source layer scale)
-        const fontSize = CONFIG.LABEL_FONT_SIZE / source.getCumulativeScale();
+        // Calculate perpendicular offset (90 degrees from edge direction)
+        // Sign of offset controls direction: positive = one side, negative = other side
+        // Scale offset by cumulative scale so it's proportional to layer size
+        const edgeHalfWidth = connection.getWorldWidth() / 2;
+        const scaledOffset = Math.abs(CONFIG.EDGE_LABEL_OFFSET) * source.getCumulativeScale();
+        const offsetDistance = edgeHalfWidth + scaledOffset;
+        const offsetSignMultiplier = CONFIG.EDGE_LABEL_OFFSET >= 0 ? 1 : -1;
+        const offsetAngle = rotation + Math.PI / 2 + (offsetSignMultiplier === -1 ? Math.PI : 0);
+        const offsetX = Math.cos(offsetAngle) * offsetDistance;
+        const offsetY = Math.sin(offsetAngle) * offsetDistance;
+        
+        const worldX = midX + offsetX;
+        const worldY = midY + offsetY;
+        
+        // Font size: base size * cumulative scale (use source layer scale)
+        const fontSize = (CONFIG.LABEL_FONT_SIZE * CONFIG.EDGE_LABEL_FONT_SCALE) * source.getCumulativeScale();
         
         return {
             worldX,
