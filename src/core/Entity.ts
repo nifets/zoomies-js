@@ -146,6 +146,22 @@ export class Entity {
     }
 
     /**
+     * Check if this entity intersects/overlaps with another entity.
+     */
+    intersects(other: Entity): boolean {
+        return ShapeComparison.shapesIntersect(
+            this.shapeObject,
+            this.x,
+            this.y,
+            this.getWorldSize(),
+            other.shapeObject,
+            other.x,
+            other.y,
+            other.getWorldSize()
+        );
+    }
+
+    /**
      * Updates the shape type (typically when layer metadata overrides it).
      * Recreates the shape with the new type.
      */

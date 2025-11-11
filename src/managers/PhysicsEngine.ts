@@ -242,9 +242,7 @@ export class PhysicsEngine {
                         
                         if (dist > 0) {
                             // Stronger parent attraction - child should primarily be attracted to parent
-                            const worldSize = entity.getWorldSize();
-                            const sizeScale = worldSize / 2 / CONFIG.BASE_UNIT_TO_PIXELS;
-                            const force = dist * CONFIG.CENTER_ATTRACTION_STRENGTH * 0.5; // 50% of normal strength
+                            const force = dist * CONFIG.CENTER_ATTRACTION_STRENGTH; 
                             entity.vx += (dx / dist) * force;
                             entity.vy += (dy / dist) * force;
                         }
@@ -379,35 +377,20 @@ export class PhysicsEngine {
      * Repulsion only activates when child is meaningfully outside (beyond margin).
      */
     private applySoftBoundaryRepulsion(child: Entity, parent: Entity): void {
-        // Calculate how close child is to parent boundary
-        const childRadius = child.getWorldSize() / 2;
-        const parentRadius = parent.getWorldSize() / 2;
-        
-        // Distance from child center to parent center
+
+        if (child.isInside(parent)) return;
+
+        // Apply a massive force to keep the child inside the parent
         const dx = child.x - parent.x;
         const dy = child.y - parent.y;
-        const distSq = dx * dx + dy * dy;
-        const dist = Math.sqrt(distSq);
 
-        if (dist < 0.001) return; // At same point, no force
+        const force = CONFIG.BOUNDARY_REPULSION_STRENGTH
+        const fx = dx * force;
+        const fy = dy * force;
 
-        // Safe zone: child should stay at least this far from parent boundary
-        const safeDistance = parentRadius * CONFIG.BOUNDARY_MARGIN - childRadius * 0.5;
-
-        // If too close to boundary, push toward center
-        if (dist > safeDistance) {
-            // Distance outside the safe zone
-            const overshoot = dist - safeDistance;
-            
-            // Repulsive force pushing toward parent center (inward)
-            const force = overshoot * CONFIG.BOUNDARY_REPULSION_STRENGTH;
-            const fx = (dx / dist) * force;
-            const fy = (dy / dist) * force;
-
-            // Push child toward parent center (repulse inward from boundary)
-            child.vx -= fx;
-            child.vy -= fy;
-        }
+        // Push child toward parent center (repulse inward from boundary)
+        child.vx -= fx;
+        child.vy -= fy;
     }
 
     /**
@@ -417,14 +400,13 @@ export class PhysicsEngine {
      */
     private enforceHardBoundary(child: Entity, parent: Entity): void {
         // Check if child is still outside parent
-        if (child.isInside(parent)) return; // Inside, constraint not needed
+        if (child.intersects(parent)) return; // Inside, constraint not needed
 
         // Child has badly escaped - this is a safety net, not normal behaviour
         const dx = child.x - parent.x;
         const dy = child.y - parent.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist < 0.001) return; // Already at centre
 
         // Get the closest point on parent boundary
         const borderPoint = parent.shapeObject.getBorderPoint(
@@ -436,16 +418,11 @@ export class PhysicsEngine {
         const normalX = (borderPoint.x - parent.x) / dist;
         const normalY = (borderPoint.y - parent.y) / dist;
 
-        child.x = borderPoint.x - normalX * (childRadius * 0.1);
-        child.y = borderPoint.y - normalY * (childRadius * 0.1);
+        child.x = borderPoint.x - normalX * (childRadius);
+        child.y = borderPoint.y - normalY * (childRadius);
 
-        // Kill outward velocity completely
-        const outwardDot = child.vx * (dx / dist) + child.vy * (dy / dist);
-        if (outwardDot > 0) {
-            child.vx -= outwardDot * (dx / dist);
-            child.vy -= outwardDot * (dy / dist);
-        }
-    }    /**
+    }   
+     /**
      * Update positions for all entities in all layers.
      */
     private updatePositions(): void {
@@ -488,22 +465,15 @@ export class PhysicsEngine {
         const distSq = dx * dx + dy * dy + 1;
         const dist = Math.sqrt(distSq);
 
-        // Check if shapes are overlapping using shape comparison
-        const overlapping = !ShapeComparison.isShapeInside(
-            a.shapeObject, a.x, a.y, a.getWorldSize(),
-            b.shapeObject, b.x, b.y, b.getWorldSize(),
-            1.0 // No margin for overlap check
-        ) && !ShapeComparison.isShapeInside(
-            b.shapeObject, b.x, b.y, b.getWorldSize(),
-            a.shapeObject, a.x, a.y, a.getWorldSize(),
-            1.0
-        );
-        
         // Size scale factor: average of their radii relative to a reference
         const aRadius = a.getWorldSize() / 2;
         const bRadius = b.getWorldSize() / 2;
         const avgRadius = (aRadius + bRadius) / 2;
         const sizeScale = avgRadius / CONFIG.BASE_UNIT_TO_PIXELS;
+        const minSeparation = (aRadius + bRadius);
+
+        // True overlap: shapes actually intersect
+        const overlapping = a.intersects(b);
 
         // Strong repulsion when shapes overlap
         if (overlapping) {
@@ -515,9 +485,9 @@ export class PhysicsEngine {
             a.vy -= fy;
             b.vx += fx;
             b.vy += fy;
-        } else if (dist < (aRadius + bRadius) * CONFIG.MODERATE_DISTANCE_THRESHOLD_MULTIPLIER) {
+        } else if (dist < minSeparation * CONFIG.MODERATE_DISTANCE_THRESHOLD_MULTIPLIER) {
             // Weaker repulsion at moderate distance
-            const force = (CONFIG.BASE_REPULSION_STRENGTH * multiplier * sizeScale) / distSq;
+            const force = (CONFIG.BASE_REPULSION_STRENGTH * multiplier * sizeScale * sizeScale) / distSq;
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 

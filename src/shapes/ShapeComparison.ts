@@ -30,7 +30,7 @@ export class ShapeComparison {
         outerX: number,
         outerY: number,
         outerWorldSize: number,
-        margin: number = 0.9
+        margin: number = 1.0
     ): boolean {
         const innerRadius = innerWorldSize / 2;
         const outerRadius = outerWorldSize / 2;
@@ -173,5 +173,115 @@ export class ShapeComparison {
         if (distance < 0.001) return null; // Essentially at same point
 
         return { escapeX, escapeY, distance };
+    }
+
+    /**
+     * Check if two shapes intersect/overlap (neither is completely inside the other, but they touch).
+     * Handles all combinations: circle-circle, circle-rect, rect-rect, rect-circle.
+     */
+    static shapesIntersect(
+        shape1: Shape,
+        x1: number,
+        y1: number,
+        size1: number,
+        shape2: Shape,
+        x2: number,
+        y2: number,
+        size2: number
+    ): boolean {
+        const radius1 = size1 / 2;
+        const radius2 = size2 / 2;
+
+        // Circle-circle intersection
+        if (shape1 instanceof CircleShape && shape2 instanceof CircleShape) {
+            return this.circleCircleIntersect(x1, y1, radius1, x2, y2, radius2);
+        }
+
+        // Circle-rectangle intersection
+        if (shape1 instanceof CircleShape && shape2 instanceof RectangleShape) {
+            return this.circleRectangleIntersect(
+                x1, y1, radius1,
+                x2, y2, shape2 as RectangleShape, size2
+            );
+        }
+
+        // Rectangle-circle intersection (swap order)
+        if (shape1 instanceof RectangleShape && shape2 instanceof CircleShape) {
+            return this.circleRectangleIntersect(
+                x2, y2, radius2,
+                x1, y1, shape1 as RectangleShape, size1
+            );
+        }
+
+        // Rectangle-rectangle intersection
+        if (shape1 instanceof RectangleShape && shape2 instanceof RectangleShape) {
+            return this.rectangleRectangleIntersect(
+                x1, y1, shape1 as RectangleShape, size1,
+                x2, y2, shape2 as RectangleShape, size2
+            );
+        }
+
+        return false;
+    }
+
+    /**
+     * Circle-circle intersection: centres closer than sum of radii.
+     */
+    private static circleCircleIntersect(
+        x1: number, y1: number, r1: number,
+        x2: number, y2: number, r2: number
+    ): boolean {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const distSq = dx * dx + dy * dy;
+        const minDistSq = (r1 + r2) * (r1 + r2);
+        return distSq < minDistSq;
+    }
+
+    /**
+     * Circle-rectangle intersection: circle centre is within rectangle + radius distance,
+     * OR any rectangle edge/corner is within circle radius.
+     */
+    private static circleRectangleIntersect(
+        cx: number, cy: number, cRadius: number,
+        rectX: number, rectY: number, rect: RectangleShape, rectWorldSize: number
+    ): boolean {
+        const scale = rectWorldSize / rect.getDiameter();
+        const halfWidth = (rect.getWidth() * scale) / 2;
+        const halfHeight = (rect.getHeight() * scale) / 2;
+
+        // Find closest point on rectangle to circle centre
+        const closestX = Math.max(rectX - halfWidth, Math.min(cx, rectX + halfWidth));
+        const closestY = Math.max(rectY - halfHeight, Math.min(cy, rectY + halfHeight));
+
+        const dx = cx - closestX;
+        const dy = cy - closestY;
+        const distSq = dx * dx + dy * dy;
+        const radiusSq = cRadius * cRadius;
+
+        return distSq < radiusSq;
+    }
+
+    /**
+     * Rectangle-rectangle intersection: axis-aligned bounding box check.
+     * Rectangles intersect if they overlap on both axes.
+     */
+    private static rectangleRectangleIntersect(
+        x1: number, y1: number, rect1: RectangleShape, size1: number,
+        x2: number, y2: number, rect2: RectangleShape, size2: number
+    ): boolean {
+        const scale1 = size1 / rect1.getDiameter();
+        const scale2 = size2 / rect2.getDiameter();
+
+        const halfW1 = (rect1.getWidth() * scale1) / 2;
+        const halfH1 = (rect1.getHeight() * scale1) / 2;
+        const halfW2 = (rect2.getWidth() * scale2) / 2;
+        const halfH2 = (rect2.getHeight() * scale2) / 2;
+
+        // AABB collision: rectangles don't overlap if separated on either axis
+        const separatedX = Math.abs(x1 - x2) > halfW1 + halfW2;
+        const separatedY = Math.abs(y1 - y2) > halfH1 + halfH2;
+
+        return !separatedX && !separatedY;
     }
 }
