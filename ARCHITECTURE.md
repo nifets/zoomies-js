@@ -109,13 +109,49 @@ GraphManager.update()
 
 ---
 
-## Zoom Window
+## Zoom Window & Presentation Modes
 
 Logarithmic layer scaling: `zoomPerLayer = log₂(layerScaleFactor)`. Multiple layers visible at once with smooth opacity fading. Boundary layers persist at extreme zoom to keep physics active.
 
+**Presentation Modes** (per entity, based on zoom position relative to layer window segments):
+- **INVISIBLE**: Outside window entirely (opacity 0)
+- **FADING_IN**: Entering from zoomed-in side (opacity 0→1), label outside, children hidden
+- **EXPANDED**: At optimal zoom, full detail, opacity 1.0, label outside, border shown
+- **COLLAPSING**: Transitioning from expanded to collapsed (opacity 1→0), label moving inside, opaque background
+- **COLLAPSED**: Full detail zone complete, opacity 1.0, label inside, fully visible (e.g., children shown under expanded parent)
+- **FADING_OUT**: Leaving towards zoomed-out side (opacity 1→0), label inside, border hidden
+
+All rendering properties (opacity, background, label position, border, collapse state) derive deterministically from the presentation mode. Layers don't control children visibility directly; segment positioning ensures parent EXPANDED overlaps with child COLLAPSED, creating the visual hierarchy naturally.
+
 ---
 
+## Clean Responsibility Boundaries (Option A)
 
+After refactor, each class has ONE clear job:
+
+### ScaleBar.ts - Window Geometry (Zoom Space)
+- Computes optimal zoom for each layer (in log space)
+- Computes layer window segments (6 boundaries: fadingInMin, expandedMin, expandedMax, collapsingMax, collapsedMax, fadingOutMax)
+- Provides: `getLayerWindowSegments(layer)` → `{ fadingInMin, expandedMin, expandedMax, collapsingMax, collapsedMax, fadingOutMax }`
+- Provides: `getLayerWindowZoom(layer)` → `{ minZoom, maxZoom }` (direct access, no conversion)
+- Public API: `getLayerWindow(layer)` → `{ minScale, maxScale }` (for backward compatibility)
+
+### LayerDetailManager.ts - Presentation Logic
+- Determines which presentation mode each entity is in at current zoom
+- Computes all rendering properties from the mode
+- Returns: `DetailState { visible, opacity, background, labelInside, showChildren, showBorder }`
+- Single authority for all visibility decisions
+
+### Renderer.ts - Pure Rendering
+- Takes `DetailState` and applies properties mechanically
+- Never decides what should be visible
+- Never calculates opacity
+- Simply: `graphics.alpha = detailState.opacity`, `if (detailState.showBorder) drawBorder()`, etc.
+- Removed: `getChildNodeOpacity()` method (visibility logic belongs in LayerDetailManager, not Renderer)
+
+### LabelRenderer.ts - Label Positioning
+- Converts `labelInside` boolean to position coordinates
+- No decision logic, pure math helper
 
 ---
 

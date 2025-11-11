@@ -1,8 +1,6 @@
-import { Entity } from '../core/Entity';
-
 /**
  * Manages zoom level and layer-based visibility.
- * Handles smooth transitions and dynamic composite expansion.
+ * Handles smooth zoom animations with easing.
  */
 export class ZoomManager {
     zoomLevel: number;
@@ -88,14 +86,5 @@ export class ZoomManager {
         };
 
         requestAnimationFrame(animate);
-    }
-
-    /**
-     * Determine if a composite should auto-expand based on zoom level.
-     * Uses a simple threshold for backwards compatibility.
-     */
-    shouldAutoExpand(composite: Entity, threshold: number = 0.3): boolean {
-        // Simple heuristic: expand if zoom is high enough
-        return this.zoomLevel > threshold;
     }
 }

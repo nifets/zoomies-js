@@ -103,14 +103,6 @@ export class Zoomies {
         this.manager.getInteractionManager().on(event, callback);
     }
 
-    collapseEntity(composite: Entity): void {
-        this.manager.collapseEntity(composite);
-    }
-
-    expandEntity(composite: Entity): void {
-        this.manager.expandEntity(composite);
-    }
-
     toggleZoomDebug(): void {
         this.manager.toggleZoomDebug();
     }

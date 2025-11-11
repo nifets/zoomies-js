@@ -391,6 +391,47 @@ export class Renderer {
     }
 
     /**
+     * Remove graphics for a node from the renderer.
+     * Called when node becomes invisible to clean up Pixi containers.
+     */
+    removeNodeGraphics(node: Entity): void {
+        const graphics = this.nodeGraphics.get(node);
+        if (graphics && graphics.parent) {
+            this.nodeContainer.removeChild(graphics);
+        }
+        
+        const label = this.nodeLabels.get(node);
+        if (label && label.parent) {
+            this.labelContainer.removeChild(label);
+        }
+        
+        this.nodeGraphics.delete(node);
+        this.nodeLabels.delete(node);
+    }
+
+    /**
+     * Remove graphics for a connection from the renderer.
+     * Called when connection becomes invisible to clean up Pixi containers.
+     */
+    removeConnectionGraphics(connection: Connection): void {
+        const graphics = this.connectionGraphics.get(connection);
+        if (graphics && graphics.parent) {
+            const container = this.isConnectionIntraLayer(connection) 
+                ? this.intraLayerConnectionContainer 
+                : this.crossLayerConnectionContainer;
+            container.removeChild(graphics);
+        }
+        
+        const label = this.edgeLabels.get(connection);
+        if (label && label.parent) {
+            this.labelContainer.removeChild(label);
+        }
+        
+        this.connectionGraphics.delete(connection);
+        this.edgeLabels.delete(connection);
+    }
+
+    /**
      * Draw a label for a connection at its midpoint.
      */
     private drawConnectionLabel(connection: Connection, opacity: number = 1): void {

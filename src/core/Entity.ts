@@ -199,33 +199,8 @@ export class Entity {
     }
 
     /**
-     * Collapse this entity: hide internal children/connections.
-     */
-    collapse(): void {
-        this.collapsed = true;
-        this.children.forEach(child => {
-            child.visible = false;
-        });
-        this.connections.forEach(conn => {
-            conn.hidden = true;
-        });
-    }
-
-    /**
-     * Expand this entity: show internal children/connections.
-     */
-    expand(): void {
-        this.collapsed = false;
-        this.children.forEach(child => {
-            child.visible = true;
-        });
-        this.connections.forEach(conn => {
-            conn.hidden = false;
-        });
-    }
-
-    /**
      * Update summary connections when state changes.
+     * Note: collapsed state is now managed by LayerDetailManager.
      */
     updateSummaryEdges(): void {
         if (!this.collapsed) return;

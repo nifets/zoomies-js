@@ -485,28 +485,6 @@ export class GraphManager {
     /**
      * Collapse a composite entity.
      */
-    collapseEntity(composite: Entity): void {
-        composite.collapse();
-        this.updateSummaryEdges(composite);
-    }
-
-    /**
-     * Expand a composite entity.
-     */
-    expandEntity(composite: Entity): void {
-        composite.expand();
-        this.updateSummaryEdges(composite);
-    }
-
-    /**
-     * Update summary edges for a composite.
-     */
-    private updateSummaryEdges(composite: Entity): void {
-        if (composite.collapsed) {
-            composite.updateSummaryEdges();
-        }
-    }
-
     /**
      * Bind mouse/touch interactions.
      */
@@ -639,25 +617,6 @@ export class GraphManager {
             }
             this.draggedNode = null;
         });
-
-        this.canvas.addEventListener('contextmenu', (e: MouseEvent) => {
-            e.preventDefault();
-            const { worldX, worldY } = getWorldCoords(e);
-
-            for (const composite of this.getAllComposites()) {
-                const dist = Math.hypot(composite.x - worldX, composite.y - worldY);
-                const worldSize = composite.getWorldSize();
-                const radius = worldSize / 2;
-                if (dist < radius * 1.5 * 2) {
-                    if (composite.collapsed) {
-                        this.expandEntity(composite);
-                    } else {
-                        this.collapseEntity(composite);
-                    }
-                    return;
-                }
-            }
-        });
     }
 
     /**
@@ -688,15 +647,6 @@ export class GraphManager {
                 conn.setOpacity(1.0);
             } else {
                 conn.setOpacity(0);
-            }
-        }
-
-        // Auto-expand/collapse composites based on zoom
-        for (const composite of this.getAllComposites()) {
-            if (this.zoomManager.shouldAutoExpand(composite, 0.5)) {
-                if (composite.collapsed) {
-                    this.expandEntity(composite);
-                }
             }
         }
     }
@@ -770,6 +720,19 @@ export class GraphManager {
         
         if (CONFIG.DEBUG) {
             console.log(`[GraphManager.render] Zoom: ${this.zoomManager.zoomLevel.toFixed(2)}, Visible layers: [${Array.from(visibleLayers).join(', ')}]`);
+        }
+
+        // Clean up graphics for non-visible entities (remove from Pixi containers)
+        for (const entity of this.getAllEntities()) {
+            if (!visibleEntitySet.has(entity)) {
+                this.renderer.removeNodeGraphics(entity);
+            }
+        }
+        
+        for (const conn of this.getAllConnections()) {
+            if (!conn.sources.some(s => visibleEntitySet.has(s)) && !conn.targets.some(t => visibleEntitySet.has(t))) {
+                this.renderer.removeConnectionGraphics(conn);
+            }
         }
 
         // Draw each layer in REVERSE order (higher layers first, so they render underneath)

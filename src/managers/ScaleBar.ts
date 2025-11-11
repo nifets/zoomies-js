@@ -14,32 +14,28 @@ import { CONFIG } from '../config';
  * This ensures visual scale invariance: zooming out by log₂(k) units shows objects
  * that are k× bigger at the same on-screen size.
  *
- * ZOOM DIRECTION REFERENCE:
- * - Positive zoom = zoomed in (higher numbers, further right on scale bar)
- * - Negative zoom = zoomed out (lower numbers, further left on scale bar)
- * - Higher zoom → larger camera scale → objects appear smaller
- * - Lower zoom → smaller camera scale → objects appear larger
+ * ZOOM DIRECTION REFERENCE (where scale = 2^(-zoom)):
+ * - Higher/more positive zoom = lower scale = zoomed IN (LEFT on scale bar, see less)
+ * - Lower/more negative zoom = higher scale = zoomed OUT (RIGHT on scale bar, see more)
+ * - L0 optimal: zoom=0, scale=1 (mid-position)
+ * - L1 optimal: zoom=-log₂(3)≈-1.585, scale=3 (right of L0, more abstract)
+ * - L2 optimal: zoom≈-3.17, scale≈9 (further right, even more abstract)
  *
- * ASYMMETRICAL FADE REGIONS WITH OVERLAP:
- * Each layer has a fade region [bottomZoom, topZoom] where it's visible/fading.
- * The region extends asymmetrically with overlap for smooth crossfading:
- * - topZoom = layer's optimal zoom (fully visible here)
- * - bottomZoom = next higher layer's optimal - fadeDistance (creates overlap zone)
+ * LAYER VISIBILITY WINDOWS:
+ * Each layer has a window [minScale, maxScale] where it's visible with fading at edges.
+ * Window extends asymmetrically around optimal zoom:
+ * - minZoom (left/zoomed-in): extends 25% towards previous layer (or maxZoom for L0)
+ * - maxZoom (right/zoomed-out): extends 75% towards next layer (or minZoom for max layer)
  *
- * Example with 3 layers (L0 at 0, L1 at -2.32, L2 at -4.64, fadeDistance=0.6):
- * - L0 fade region: [-1.72, 0]      (visible from -1.72 down to optimal at 0)
- * - L1 fade region: [-4.04, -2.32]  (visible from -4.04 down to optimal at -2.32)
- * - L2 fade region: [-∞, -4.64]     (visible from optimal downward)
+ * Example with 3 layers (L0 at 0, L1 at -1.585, L2 at -3.17):
+ * - L0 window: extends left slightly, right 75% towards L1 at -1.585
+ * - L1 window: extends left 25% towards L0, right 75% towards L2
+ * - L2 window: extends left 25% towards L1, right to minZoom (far right)
  *
- * This creates overlap zones for smooth crossfading:
- * - At zoom=0: only L0 visible (at optimal)
- * - At zoom=-1: only L0 visible (before L0's fadeDistance boundary)
- * - At zoom=-1.72: L0 starts fading, L1 starts appearing
- * - At zoom=-2.32: L0 opaque, L1 transparent (both fully visible for layer switch)
- * - At zoom=-3: L0 fading out, L1 visible
- * - At zoom=-4.04: L1 starts fading, L2 starts appearing
- * - At zoom=-4.64: L1 opaque, L2 transparent (both fully visible)
- * - Asymmetrical: each layer only visible at its optimal and below (towards higher layers)
+ * Fading:
+ * - L0 never fades (always fully opaque when in window)
+ * - Other layers: fade at window edges (checkpoints at 10% into window from edges)
+ * - Creates smooth crossfading: L0 visible most of L1's window, L1 visible most of L2's window
  */
 export class ScaleBar {
     /** Layer index → optimal zoom position */

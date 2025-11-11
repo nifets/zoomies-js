@@ -1,0 +1,113 @@
+================================================================================
+COORDINATE SYSTEM USAGE MAP - QUICK REFERENCE
+================================================================================
+
+TWO COORDINATE SYSTEMS IN USE:
+  - ZOOM: camera zoom level (positive=in, negative=out), used in layer positioning
+  - SCALE: visual size factor = 2^(-zoom), used in rendering & visibility
+
+CONVERSION: scale = 2^(-zoom), zoom = -log₂(scale)
+
+================================================================================
+INTERNAL LAYER CALCULATIONS (ALL IN ZOOM SPACE)
+================================================================================
+
+ScaleBar.ts:
+  - layerPositions[layer] → optimal zoom for layer
+  - layerSpacings[layer] → spacing to next layer in zoom units
+  - All arithmetic: optimalZoom ± (nextOptimal - optimalZoom) * fraction
+  - getLayerWindow() calculates in zoom, converts to scale at return
+
+ZoomManager.ts:
+  - zoomLevel: current camera position in zoom space
+  - All animation calculations in zoom space
+
+================================================================================
+VISIBILITY & PHYSICS (ALL IN SCALE SPACE)
+================================================================================
+
+ScaleBar.ts (Public API):
+  - getLayerWindow(layer) → { minScale, maxScale }
+  - isLayerVisible(layer, zoomLevel) → compares currentScale vs window
+  - getNormalisedFadeParameter(layer, zoomLevel) → works in scale space
+
+Renderer.ts:
+  - node.getCumulativeScale() → visual size factor
+  - Calculations: fontSize = CONFIG.SIZE * cumulativeScale
+
+LabelRenderer.ts:
+  - entity.getCumulativeScale() → for font sizing
+
+Entity.ts:
+  - cumulativeScale: visual size factor
+  - getWorldSize(cumulativeScale) uses it
+
+================================================================================
+PROBLEM AREAS
+================================================================================
+
+1. INCONSISTENT COORDINATES
+   ✗ Layer calculations in zoom, windows exposed as scale
+   ✗ Bidirectional conversion needed (ScaleBar→ZoomDebugWidget)
+   ✗ Different parts of codebase think in different coordinates
+
+2. PER-LAYER WINDOW CALCULATION (NOT GLOBAL)
+   ✗ Each layer calculated independently
+   ✗ 25/75 split to adjacent layers (arbitrary)
+   ✗ NO enforcement of alignment constraints
+   ✗ Can have gaps/overlaps between layer windows
+
+3. NO SEGMENT BOUNDARIES
+   ✗ Window just has min/max (2 numbers)
+   ✗ Can't tell where FADING_IN ends, EXPANDED begins, etc.
+   ✗ No explicit mode determination logic
+
+================================================================================
+RECOMMENDED SOLUTION: OPTION A
+================================================================================
+
+KEEP: Zoom coordinates internal (for layer arithmetic)
+KEEP: Scale coordinates in API (for backward compatibility)
+
+NEW:
+  1. Add getLayerWindowZoom(layer) → { minZoom, maxZoom }
+  2. Add LayerWindowSegments type:
+     {
+       fadingInMin, expandedMin, expandedMax,
+       collapsingMax, fadingOutMax
+     }
+  3. Add computeAllLayerWindows() → Map<layer, segments>
+     Global constraint solving:
+     - L(n).collapsingMax == L(n+1).fadingInMin
+     - optimal = (expandedMin + expandedMax) / 2 in log space
+     - Segment widths based on layer spacing
+
+RESULT:
+  ✓ Simpler layer arithmetic in zoom space
+  ✓ Cleaner global constraints
+  ✓ Explicit segment boundaries
+  ✓ Can determine presentation modes
+  ✓ No bidirectional conversion needed
+
+================================================================================
+FILES NEEDING CHANGES
+================================================================================
+
+ScaleBar.ts ⚠️ MAJOR REFACTOR
+  - Add LayerWindowSegments type
+  - Implement computeAllLayerWindows()
+  - Store layerWindowSegments: Map<number, LayerWindowSegments>
+  - Add getLayerWindowSegments(layer)
+  - Keep getLayerWindow() for compatibility
+
+LayerDetailManager.ts ⚠️ UPDATE
+  - Use segment boundaries for mode determination
+  - Return mode-specific properties in DetailState
+
+ZoomDebugWidget.ts ⚠️ UPDATE
+  - Visualise segment boundaries (fadingIn, expanded, collapsing, fadingOut)
+
+Others: ✅ No changes needed
+  - Renderer.ts, LabelRenderer.ts, Entity.ts, Connection.ts, ZoomManager.ts
+
+================================================================================
