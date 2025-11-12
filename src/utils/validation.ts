@@ -3,7 +3,7 @@ import { Entity } from '../core/Entity';
 /**
  * Configuration for composite validation.
  */
-interface ValidationConfig {
+export interface ValidationConfig {
     minAreaMultiplier?: number;
 }
 

@@ -1,0 +1,13 @@
+{
+  "entryPoints": ["src"],
+  "out": "docs",
+  "plugin": ["typedoc-plugin-markdown"],
+  "readme": "none",
+  "hideBreadcrumbs": true,
+  "hidePageTitle": true,
+  "excludePrivate": false,
+  "excludeProtected": false,
+  "excludeExternals": true,
+  "includeVersion": false,
+  "sort": ["source-order"]
+}

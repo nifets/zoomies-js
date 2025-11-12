@@ -4,21 +4,25 @@
  */
 export { Entity } from './core/Entity';
 export { Connection } from './core/Connection';
+export type { SubEdge } from './core/Connection';
 export { Renderer } from './rendering/Renderer';
 export { InteractionManager } from './managers/InteractionManager';
 export { ZoomManager } from './managers/ZoomManager';
 export { PhysicsEngine } from './managers/PhysicsEngine';
-export type { PhysicsConfig } from './managers/PhysicsEngine';
 export { GraphManager } from './managers/GraphManager';
 export { LayerDetailManager } from './managers/LayerDetailManager';
-export type { LayerMetadata, LayerDetailConfig } from './managers/LayerDetailManager';
+export type { LayerMetadata, LayerDetailConfig, DetailState, PresentationMode } from './managers/LayerDetailManager';
 export { validateCompositeSize, validateCompositeHierarchy } from './utils/validation';
+export type { ValidationConfig } from './utils/validation';
+export { ZoomDebugWidget } from './debug/ZoomDebugWidget';
+export { ScaleBar } from './managers/ScaleBar';
+export type { LayerWindowSegments } from './managers/ScaleBar';
+export type { Shape } from './shapes/Shape';
 
 // Create a convenience class for quick initialization
 import { GraphManager } from './managers/GraphManager';
 import { Entity } from './core/Entity';
 import { Connection } from './core/Connection';
-import type { PhysicsConfig } from './managers/PhysicsEngine';
 import type { LayerDetailConfig } from './managers/LayerDetailManager';
 import { validateCompositeHierarchy } from './utils/validation';
 
@@ -31,7 +35,6 @@ export class Zoomies {
         connections: Connection[] = [],
         options: {
             enablePhysics?: boolean;
-            physicsConfig?: PhysicsConfig;
             layerDetailConfig?: LayerDetailConfig;
             renderConfig?: Record<string, any>;
         } = {}
@@ -41,7 +44,7 @@ export class Zoomies {
             throw new Error(`Canvas element not found: ${selector}`);
         }
 
-        this.manager = new GraphManager(canvas, options.physicsConfig, options.layerDetailConfig);
+        this.manager = new GraphManager(canvas, options.layerDetailConfig);
         
         // Normalize single entity (legacy) to array
         const entityList = Array.isArray(entities) ? entities : [entities];
